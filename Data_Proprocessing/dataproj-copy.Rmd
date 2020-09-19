@@ -1,0 +1,71 @@
+---
+title: "Data3001_proj"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+##set.seed(1)
+gliders<-read.csv("~/Desktop/IMOS_-_Australian_National_Facility_for_Ocean_Gliders_(ANFOG)_-_delayed_mode_glider_deployments.csv", skip = 41, header = TRUE)
+```
+
+
+
+```{r}
+str(gliders)
+attach(gliders)
+```
+We first check the data and delete the invalid dataset
+```{r}
+library(dplyr)
+count(PSAL >= 2 & PSAL <= 41)
+gliders_valid<-gliders[(PSAL >= 2 & PSAL <= 41),]
+count(gliders_valid$CPHL>= 0&gliders_valid$CPHL<=100)
+gliders_valid<-gliders_valid[(gliders_valid$CPHL>= 0&gliders_valid$CPHL<=100),]
+count(gliders_valid$CDOM >=0 & gliders_valid$CDOM <= 400)
+gliders_valid<-gliders_valid[(gliders_valid$CDOM>=0& gliders_valid$CDOM <= 400),]
+count(gliders_valid$VBSC>=0& gliders_valid$VBSC <= 0.1)
+gliders_valid<-gliders_valid[(gliders_valid$VBSC>=0 & gliders_valid$VBSC <= 0.1),]
+count(gliders_valid$IRRAD555>=0& gliders_valid$IRRAD555 <= 1000)
+gliders_valid<-gliders_valid[(gliders_valid$IRRAD555>=0& gliders_valid$IRRAD555 <= 1000),]
+
+```
+
+
+We look at the distribution, maybe a gamma distribution.
+
+```{r}
+install.packages("fitdistrplus")
+library("fitdistrplus")
+library(ggplot2)
+summary(CPHL)
+plot(density(gliders_valid$CPHL, na.rm = TRUE), xlim = c(0,2))
+CPHL_positive_value <- gliders_valid$CPHL
+fit_CPHL<-fitdistr(na.omit(CPHL_positive_value), densfun = "gamma") 
+rand.gamma <- rgamma(10000,
+shape = fit_CPHL$estimate[1],
+rate = fit_CPHL$estimate[2])
+lines(density(rand.gamma),col="red")
+```
+
+We will then look at the correlation 
+```{r}
+library("corrplot")
+cor_gliders<-gliders_valid[,c(10,12,14,16,18,20,22,24,26,28,30,32,34,36,44,50,52,54,56)]
+cor_gliders<-na.omit(cor_gliders)
+corrplot(corr=cor(cor_gliders),method = "color",tl.col="black")
+```
+
+```{r}
+boxplot(gliders_valid$TIME_quality_control, gliders_valid$LATITUDE_quality_control, gliders_valid$LONGITUDE_quality_control, gliders_valid$PRES_quality_control, gliders_valid$DEPTH_quality_control, gliders_valid$PROFILE_quality_control, gliders_valid$PHASE_quality_control, gliders_valid$TEMP_quality_control, gliders_valid$PSAL_quality_control, gliders_valid$DOX1_quality_control, gliders_valid$DOX2_quality_control, gliders_valid$CPHL_quality_control, gliders_valid$CDOM_quality_control, gliders_valid$CNDC_quality_control)
+```
+
