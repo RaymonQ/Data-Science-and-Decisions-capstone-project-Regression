@@ -132,12 +132,105 @@ cor_gliders<-na.omit(cor_gliders)
 cor(cor_gliders)
 corrplot(corr=cor(cor_gliders),method = "color",tl.col="black")
 ```
+```{r}
+hist(gliders_valid$TIME_quality_control) # all good data
+hist(gliders_valid$LATITUDE_quality_control) # 1.5% good data, rest are Interpolated value
+hist(gliders_valid$LONGITUDE_quality_control) # 1.5% good data, rest are Interpolated value
+hist(gliders_valid$PRES_quality_control) # all good data
+hist(gliders_valid$DEPTH_quality_control)# all good data
+hist(gliders_valid$PROFILE_quality_control) # all No QC performed data
+hist(gliders_valid$PHASE_quality_control)# all No QC performed data
+hist(gliders_valid$TEMP_quality_control)# all good data
+hist(gliders_valid$PSAL_quality_control)# all good data
+hist(gliders_valid$DOX1_quality_control)# all good data
+hist(gliders_valid$DOX2_quality_control)# 81% good data, 11.3% Bad data that are potentially correctable, 8% Missing value
+hist(gliders_valid$CPHL_quality_control)# all good data
+hist(gliders_valid$CDOM_quality_control)# all good data
+hist(gliders_valid$CNDC_quality_control)# all good data
+hist(gliders_valid$VBSC_quality_control)# 86% good data, 9% Bad data that are potentially correctable, 5% bad data
+hist(gliders_valid$UCUR_quality_control)#  missing value
+hist(gliders_valid$VCUR_quality_control)#  missing value
+hist(gliders_valid$HEAD_quality_control)# 99.9% No QC performed data
+hist(gliders_valid$UCUR_GPS_quality_control)# missing value
+hist(gliders_valid$VCUR_GPS_quality_control)# missing value
+hist(gliders_valid$IRRAD443_quality_control) # 55%  good data, 45%  bad data
+hist(gliders_valid$IRRAD490_quality_control) # 55%  good data, 45%  bad data
+hist(gliders_valid$IRRAD555_quality_control) # 55%  good data, 45%  bad data
+hist(gliders_valid$IRRAD670_quality_control) # 55%  good data, 45%  bad data
+```
 
+```{r}
+table(gliders_valid$LATITUDE_quality_control)
+23701/(23701+1562349+366)
+366/(23701+1562349+366)
+```
 
 
 ```{r}
-boxplot(gliders_valid$TIME_quality_control, gliders_valid$LATITUDE_quality_control, gliders_valid$LONGITUDE_quality_control, gliders_valid$PRES_quality_control, gliders_valid$DEPTH_quality_control, gliders_valid$PROFILE_quality_control, gliders_valid$PHASE_quality_control, gliders_valid$TEMP_quality_control, gliders_valid$PSAL_quality_control, gliders_valid$DOX1_quality_control, gliders_valid$DOX2_quality_control, gliders_valid$CPHL_quality_control, gliders_valid$CDOM_quality_control, gliders_valid$CNDC_quality_control)
+table(gliders_valid$LONGITUDE_quality_control)
 ```
+
+
+```{r}
+table(gliders_valid$PRES_quality_control)
+```
+
+
+```{r}
+table(gliders_valid$PROFILE_quality_control)
+```
+
+
+```{r}
+table(gliders_valid$PHASE_quality_control)
+```
+
+
+```{r}
+table(gliders_valid$DOX2_quality_control)# almost good data
+126885/(1930+1277617+179281+703+126885)
+```
+
+
+```{r}
+table(gliders_valid$VBSC_quality_control)# almost good data
+76475/(2230+1368673+139038+76475)
+```
+
+
+```{r}
+table(gliders_valid$UCUR_quality_control)
+table(gliders_valid$VCUR_quality_control)
+```
+
+```{r}
+table(gliders_valid$HEAD_quality_control)
+1584749/(1584749+1667)
+```
+
+
+```{r}
+table(gliders_valid$UCUR_GPS_quality_control)
+table(gliders_valid$VCUR_GPS_quality_control)
+```
+
+```{r}
+table(gliders_valid$IRRAD443_quality_control)
+```
+
+```{r}
+table(gliders_valid$IRRAD490_quality_control)
+```
+
+
+```{r}
+table(gliders_valid$IRRAD555_quality_control)
+```
+```{r}
+table(gliders_valid$IRRAD670_quality_control)
+```
+
+
 
 ```{r}
 plot(gliders_valid$TEMP,gliders_valid$CPHL)
