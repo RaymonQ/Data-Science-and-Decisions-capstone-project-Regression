@@ -255,3 +255,79 @@ plot(gliders_valid$IRRAD555,gliders_valid$CPHL)
 plot(gliders_valid$IRRAD490,gliders_valid$CPHL)
 
 ```
+
+
+KNN:
+```{r}
+#install.packages("kknn")
+#library("kknn")
+```
+
+method 1
+```{r}
+install.packages("plyr")
+library("plyr")
+temp.data <- data.frame(gliders_valid$TEMP)
+head(temp.data)
+nrow(temp.data)
+nrow(na.omit(temp.data))/nrow(temp.data)
+ran <- sample(1:nrow(temp.data), 0.9 * nrow(temp.data))
+nor <-function(x) { (x -min(x))/(max(x)-min(x))   }
+temp_norm <- as.data.frame(lapply(temp.data[,c(1)], nor))
+summary(temp_norm)
+temp_train <- temp_norm[ran,] 
+
+```
+
+method 2
+```{r}
+tem <- data.frame(scale(gliders_valid$TEMP))
+tem <- cbind(tem, tem[, 1])
+names(tem)[1] = "Species"
+sample.list <- sample(1:150, size = 100)
+tem.known <- tem[sample.list, ]
+tem.unknown <- tem[-sample.list, ]
+length.known <- nrow(tem.known)
+length.unknown <- nrow(tem.unknown)
+for (i in 1:length.unknown) { 
+    dis_to_known <- data.frame(dis = rep(0, length.known)) 
+    for (j in 1:length.known) { 
+        dis_to_known[j, 1] <- dist(rbind(tem.unknown[i, 1], tem.known[j,1]), method = "euclidean") 
+        dis_to_known[j, 2] <- tem.known[j, 1]
+        names(dis_to_known)[2] = "Species" 
+    }
+
+    dis_to_known <- dis_to_known[order(dis_to_known$dis), ]
+
+    k <- 5 
+    type_freq <- as.data.frame(table(dis_to_known[1:k, ]$Species)) 
+    type_freq <- type_freq[order(-type_freq$Freq), ]
+    tem.unknown[i, 1] <- type_freq[1, 1]
+}
+
+names(tem.unknown)[1] = "Species.pre"
+
+tem.unknown[, 5:6]
+```
+
+method 3:
+```{r}
+tem <- data.frame(gliders_valid$TEMP)
+data(tem)
+m <- dim(tem)[1]
+
+val <- sample(1:m, size = round(m/3), replace = FALSE, prob = rep(1/m, m))
+
+iris.learn <- iris[-val,]
+
+iris.valid <- iris[val,]
+
+iris.kknn <- kknn(Species~., iris.learn, iris.valid, distance = 1, kernel = "triangular")
+
+summary(iris.kknn)
+
+fit <- fitted(iris.kknn)
+
+table(iris.valid$Species, fit)
+```
+
