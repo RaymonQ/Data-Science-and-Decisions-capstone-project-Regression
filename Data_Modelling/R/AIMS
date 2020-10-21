@@ -1,0 +1,242 @@
+---
+title: "secondmodel"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+AIMS<-read.csv("~/Desktop/AIMS20151127.csv", header = TRUE)
+```
+
+```{r}
+attach(AIMS)
+summary(AIMS)
+```
+
+
+```{r}
+drop_aims <- c("CDOM_quality_control","CNDC_quality_control","CPHL_quality_control"," DEPTH_quality_control", "DOX1_quality_control"," DOX2_quality_control","FID","file_id", "HEAD_quality_control","IRRAD443_quality_control","IRRAD555_quality_control","IRRAD670_quality_control", "LATITUDE_quality_control","LONGITUDE_quality_control","DEPTH_quality_control","DOX2_quality_control","IRRAD490_quality_control","PHASE_quality_control","PROFILE_quality_control","PRES_quality_control","platform_code", "platform_type","PSAL_quality_control","TEMP_quality_control","TIME_quality_control","VBSC_quality_control", "VCUR_GPS_quality_control","deployment_name","time_coverage_start","time_coverage_end","geom")
+aims <- AIMS[,!(colnames(AIMS)%in%drop_aims)]
+```
+
+
+```{r}
+is_char <- lapply(aims,typeof)=="character"
+numerical_r <- aims[,!is_char]
+categorical_r <- aims[,is_char]
+```
+
+
+```{r}
+library("corrplot")
+corrplot(corr = cor(numerical_r))
+```
+
+
+```{r}
+sample_size = floor(0.9*nrow(aims))
+set.seed(777)
+# randomly split data in r with 90%training and 10% testing 
+picked = sample(seq_len(nrow(aims)),size = sample_size)
+train =aims[picked,]
+test =aims[-picked,]
+```
+
+model1: Timeseries model
+
+```{r}
+#model1: Timeseries model
+library("xts")
+library("forecast")
+library("tseries")
+library("zoo")
+traintx <- xts(train[, -1], order.by=as.Date(train$TIME))
+traints<-ts(traintx)
+```
+
+```{r}
+#the number of difference you need to make the data stationary 
+ndiffs(traints[,"CPHL"])
+NewCPHL=diff(traints[,"CPHL"],1)
+```
+
+```{r}
+plot(NewCPHL)
+```
+
+```{r}
+library("dynlm")
+fit.dynlm=dynlm(NewCPHL~LATITUDE+LONGITUDE+PRES+DEPTH+PROFILE+PHASE+TEMP+PSAL+DOX1+DOX2+CDOM+CNDC+VBSC+HEAD+L(NewCPHL),data=traints)
+```
+
+```{r}
+#performs not bad with 0.62 R-squared value
+summary(fit.dynlm)
+plot(fit.dynlm)
+```
+
+
+```{r}
+plot(traintx[,"CPHL"],col="blue")
+```
+
+```{r}
+drop_t <- c("TIME")
+train_nt<- train[,!(colnames(train)%in%drop_t)]
+aims_nt<-aims[,!(colnames(aims)%in%drop_t)]
+```
+
+```{r}
+plot(AIMS$CPHL)
+```
+
+model2: r^2 is 0.79
+```{r}
+par(mfrow = c(1, 2))
+full.mod1.gua <- glm(CPHL~.,data=train_nt)
+summary(full.mod1.gua)
+plot(full.mod1.gua)
+#Still have a heavy tail on QQ plot and variance are changing  
+#may need some transformations
+```
+
+
+```{r}
+R.sq2 <- 1-full.mod1.gua$deviance/full.mod1.gua$null.deviance
+R.sq2
+```
+
+let's try log link
+
+model3: r^2 is 0.77
+```{r}
+hist(log(AIMS$CPHL))
+```
+
+
+```{r}
+w <- which(train_nt$CPHL==0)
+train_nt <- train_nt[-w,]
+full.mod1.gam <- glm(CPHL~.,data=train_nt,family=Gamma(link = "log"))
+summary(full.mod1.gam)
+```
+
+
+```{r}
+par(mfrow = c(1, 2))
+plot(full.mod1.gam)
+```
+
+```{r}
+#r^2 is 0.77
+R.sq <- 1-full.mod1.gam$deviance/full.mod1.gam$null.deviance
+R.sq
+```
+
+model4: r^2 is 0.75
+```{r}
+full.mod1.gau2 <- glm(log(CPHL)~.,data=train_nt)
+summary1<-summary(full.mod1.gau2)
+```
+
+
+```{r}
+par(mfrow = c(1, 2))
+
+plot(full.mod1.gau2)
+```
+
+
+```{r}
+anova(full.mod1.gau2,test="Chisq")
+```
+
+
+```{r}
+library("MASS")
+step.mod1.gau3<-stepAIC(full.mod1.gau2, direction = "both",trace=FALSE)
+summary(step.mod1.gau3)
+```
+
+
+```{r}
+# r^2 is 0.75
+R.sq1 <- 1-full.mod1.gau2$deviance/full.mod1.gau2$null.deviance
+R.sq1
+```
+
+
+model5:
+```{r}
+# we cannot plot the diagram for this model since it is a multi-dimensional model.
+#install.packages("nlme")
+library(mgcv)
+gam1 <- gam(CPHL~LATITUDE+LONGITUDE+PRES+DEPTH+PROFILE+PHASE+TEMP+PSAL+DOX1+DOX2+CDOM+CNDC+VBSC+HEAD,data=train_nt)
+summary(gam1)
+```
+
+
+let's drop PROFILE:
+model6:
+```{r}
+gam2 <- gam(CPHL~LATITUDE+LONGITUDE+PRES+DEPTH+PHASE+TEMP+PSAL+DOX1+DOX2+CDOM+CNDC+VBSC+HEAD,data=train_nt)
+summary(gam2)
+```
+we can see that model 2 and model 6 all performs well with same r^2.
+
+let's compare AUC-ROC for model 2 and model 6 since although our main goal is to model, we also need to do slightly prediction. 
+
+reference: https://primoa.library.unsw.edu.au/primo-explore/fulldisplay?vid=UNSWS&docid=TN_cdi_proquest_journals_1939420655&context=PC&query=any,contains,gam%20glm&_ga=2.239581824.2030763233.1602992362-1958081504.1602114544 
+```{r}
+#install.packages("pROC")
+library("pROC")
+#pre1 <- predict(gam2,type='response')
+test_gam2 = predict.gam(gam2, newdata = train_nt, type = "response")
+test_roc1 = roc(train_nt$CPHL ~ test_gam2, plot = TRUE, print.auc = TRUE)
+```
+```{r}
+test_model2 = predict.glm(full.mod1.gua, newdata = train_nt, type = "response")
+test_roc2 = roc(train_nt$CPHL ~ test_model2, plot = TRUE, print.auc = TRUE)
+```
+
+```{r}
+#calculate the MSE
+par(mfrow = c(1, 2))
+#calculate the MSE
+plot(density(log(test$CPHL)),xlim = c(-3,2))
+plot(density(predict(full.mod1.gua,newdata=test,type="response")))
+pred_gau2<-predict(full.mod1.gua, test)
+```
+
+
+```{r}
+par(mfrow = c(1, 2))
+plot(density(log(test$CPHL)),xlim = c(-3,2))
+plot(density(predict(gam2,newdata=test,type="response")))
+pred_gau3<-predict(gam2, test)
+```
+
+
+```{r}
+library(ModelMetrics)
+data.frame(RMSE = rmse(pred_gau2, test$CPHL),
+            MAE = mae(pred_gau2, test$CPHL))
+```
+
+
+```{r}
+data.frame(RMSE = rmse(pred_gau3, test$CPHL),
+            MAE = mae(pred_gau3, test$CPHL))
+```
+
+as we can see that they all perform well with same auc too. we would choose model 6 instead of model 2 since Although GLMs were a great advance, they are largely confined to one- parameter distributions from an exponential family. There are many situations where practical data analysis and regression modelling demands much greater flexibility than this.Each class is related to each other in a natural way within this framework, GAMs are a smooth or data-driven version of GLMs.
+
+reference: https://link-springer-com.wwwproxy1.library.unsw.edu.au/book/10.1007%2F978-1-4939-2818-7 
+
+however, considering RMSE and MAE, our final model is model 2.
+
