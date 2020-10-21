@@ -1,0 +1,187 @@
+---
+title: "Lizard"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+liz<-read.csv("~/Desktop/LizardIsland20131024.csv", header = TRUE)
+attach(liz)
+summary(liz)
+```
+
+
+```{r}
+drop_liz <- c("CDOM_quality_control","CNDC_quality_control","CPHL_quality_control"," DEPTH_quality_control", "DOX1_quality_control"," DOX2_quality_control","FID","file_id", "HEAD_quality_control","IRRAD443_quality_control","IRRAD555_quality_control","IRRAD670_quality_control", "LATITUDE_quality_control","LONGITUDE_quality_control","DEPTH_quality_control","DOX2_quality_control","IRRAD490_quality_control","PHASE_quality_control","PROFILE_quality_control","PRES_quality_control","platform_code", "platform_type","PSAL_quality_control","TEMP_quality_control","TIME_quality_control","VBSC_quality_control", "VCUR_GPS_quality_control","deployment_name","time_coverage_start","time_coverage_end","geom")
+Liz <- liz[,!(colnames(liz)%in%drop_liz)]
+```
+
+
+```{r}
+is_char <- lapply(Liz,typeof)=="character"
+numerical_r <- Liz[,!is_char]
+categorical_r <- Liz[,is_char]
+library("corrplot")
+corrplot(corr = cor(numerical_r))
+```
+
+```{r}
+sample_size = floor(0.8*nrow(Liz))
+set.seed(777)
+# randomly split data in r with 90%training and 10% testing 
+picked = sample(seq_len(nrow(Liz)),size = sample_size)
+train =Liz[picked,]
+test =Liz[-picked,]
+```
+
+
+```{r}
+library("xts")
+library("forecast")
+library("tseries")
+library("zoo")
+library(boot)
+library("MASS")
+library(ModelMetrics)
+traintx <- xts(train[, -1], order.by=as.Date(train$TIME))
+traints<-ts(traintx)
+plot(traintx[,"CPHL"],col="blue")
+```
+
+
+```{r}
+drop_t <- c("TIME")
+train_nt<- train[,!(colnames(train)%in%drop_t)]
+Liz_nt<-Liz[,!(colnames(Liz)%in%drop_t)]
+#heavy right skew, gamma distribution
+hist((Liz$CPHL))
+hist((log(Liz$CPHL)))
+```
+
+Model1: gaussian distribution
+
+```{r}
+model1 <- glm(CPHL~.,data=train_nt)
+summary(model1)
+par(mfrow = c(1, 2))
+plot(model1)
+```
+
+
+```{r}
+R.sq1 <- 1-model1$deviance/model1$null.deviance
+R.sq1
+```
+
+```{r}
+car::vif(model1)
+```
+```{r}
+cv.glm(train_nt,model1,K=10)[3]
+```
+drop phase, model 2 is better than model 1, r^2 is 0.4517614
+```{r}
+model2 <- glm(CPHL~LATITUDE+LONGITUDE+PRES+DEPTH+PROFILE+TEMP+PSAL+DOX1+DOX2+CDOM+CNDC+VBSC+HEAD,data=train_nt)
+summary(model2)
+par(mfrow = c(1, 2))
+plot(model2)
+```
+
+
+```{r}
+R.sq2 <- 1-model2$deviance/model2$null.deviance
+R.sq2
+```
+
+
+```{r}
+anova(model1,model2,test="Chisq")
+```
+
+model 3: r^2 is 0.7
+```{r}
+w <- which(train_nt$CPHL==0)
+train_nt <- train_nt[-w,]
+model3 <- glm(CPHL~LATITUDE+LONGITUDE+PRES+DEPTH+PROFILE+PHASE+TEMP+PSAL+DOX1+DOX2+CDOM+CNDC+VBSC+HEAD,data=train_nt,family=Gamma(link = "log"))
+summary(model3)
+par(mfrow = c(1, 2))
+plot(model3)
+```
+
+```{r}
+R.sq3 <- 1-model3$deviance/model3$null.deviance
+R.sq3
+```
+
+```{r}
+car::vif(model3)
+```
+
+```{r}
+cv.glm(train_nt,model3,K=10)[3]
+```
+
+model 4: r^2 is 0.73
+```{r}
+model4 <- glm(log(CPHL)~.,data=train_nt)
+summary1<-summary(model4)
+par(mfrow = c(1, 2))
+plot(model4)
+```
+
+
+```{r}
+R.sq4 <- 1-model4$deviance/model4$null.deviance
+R.sq4
+```
+
+```{r}
+car::vif(model4)
+```
+
+```{r}
+cv.glm(train_nt,model4,K=10)[3]
+```
+
+
+```{r}
+anova(model4,test="Chisq")
+```
+
+Therefore we have two model
+one with the gamma distribution , model3
+one is the guassian disrtribution with log response, model4
+We will calculate the MSE and RMSE to judge their performance
+
+model 3:
+```{r}
+#calculate the MSE
+par(mfrow = c(1, 2))
+#calculate the MSE
+#guassian log distribution
+plot(density((test$CPHL)),xlim = c(0,2))
+plot(density(predict(model3,newdata=test,type="response")))
+pre3<-predict(model3, test)
+data.frame(RMSE = rmse(pre3, test$CPHL),
+            MAE = mae(pre3, test$CPHL))
+```
+
+model 4:
+```{r}
+#calculate the MSE
+par(mfrow = c(1, 2))
+#calculate the MSE
+#guassian log distribution
+plot(density((test$CPHL)),xlim = c(0,2))
+plot(density(predict(model4,newdata=test,type="response")))
+pre4<-predict(model4, test)
+data.frame(RMSE = rmse(pre4, test$CPHL),
+            MAE = mae(pre4, test$CPHL))
+```
+
+hence, our final model is model4.
+
+
