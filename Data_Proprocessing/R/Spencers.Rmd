@@ -1,0 +1,231 @@
+---
+title: "Spencer"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+spencer<-read.csv("~/Desktop/SpencerGulf20131031.csv", header = TRUE)
+attach(spencer)
+summary(spencer)
+```
+
+```{r}
+drop_spencers <- c("CDOM_quality_control","CNDC_quality_control","CPHL_quality_control"," DEPTH_quality_control", "DOX1_quality_control"," DOX2_quality_control","FID","file_id", "HEAD_quality_control","IRRAD443_quality_control","IRRAD555_quality_control","IRRAD670_quality_control", "LATITUDE_quality_control","LONGITUDE_quality_control","DEPTH_quality_control","DOX2_quality_control","IRRAD490_quality_control","PHASE_quality_control","PROFILE_quality_control","PRES_quality_control","platform_code", "platform_type","PSAL_quality_control","TEMP_quality_control","TIME_quality_control","VBSC_quality_control", "VCUR_GPS_quality_control","deployment_name","time_coverage_start","time_coverage_end","geom")
+Spencers <- spencer[,!(colnames(spencer)%in%drop_spencers)]
+```
+
+```{r}
+is_char <- lapply(Spencers,typeof)=="character"
+#### separate the data set by character and numeric 
+numerical_r <- Spencers[,!is_char]
+categorical_r <- Spencers[,is_char]
+library("corrplot")
+#correlation diagram
+#assumption:  Phase has no or tiny correlation with CPHL
+corrplot(corr = cor(numerical_r))
+```
+```{r}
+count(Spencers$CPHL == 0)
+Spener<-Spencers[Spencers$CPHL!=0,]
+sample_size = floor(0.8*nrow(Spener))
+set.seed(777)
+# randomly split data in r with 80%training and 20% testing 
+picked = sample(seq_len(nrow(Spener)),size = sample_size)
+train =Spener[picked,]
+test =Spener[-picked,]
+```
+
+```{r}
+#we realise there are dates for this dataset 
+#hypothesis: the CPHL growth correlated with times
+#model1: Timeseriest 
+#reject hypothesis 
+#starting from 31/10-11/13 
+#short period
+#drop time 
+library("xts")
+library("forecast")
+library("tseries")
+library("zoo")
+library(boot)
+library("MASS")
+library(ModelMetrics)
+traintx <- xts(train[, -1], order.by=as.Date(train$TIME))
+traints<-ts(traintx)
+plot(traintx[,"CPHL"],col="blue")
+```
+```{r}
+drop_t <- c("TIME")
+train_nt<- train[,!(colnames(train)%in%drop_t)]
+Spencers_nt<-Spencers[,!(colnames(Spencers)%in%drop_t)]
+
+#heavy right skew, gamma distribution
+hist((Spencers$CPHL))
+hist((log(Spencers$CPHL)))
+```
+
+Model1: gaussian distribution
+```{r}
+# fit into a gaussian 
+#residuals vs fitted: The variance is changing 
+#Q-Q plot fit better during [-2,2] quantiles
+par(mfrow = c(1, 2))
+full.mod1.gua <- glm(CPHL~.,data=train_nt)
+summary(full.mod1.gua)
+plot(full.mod1.gua)
+```
+```{r}
+#r^2 is 0.49
+R.sq2 <- 1-full.mod1.gua$deviance/full.mod1.gua$null.deviance
+R.sq2
+```
+```{r}
+#didn't drop anything
+step.mod1.gua<-stepAIC(full.mod1.gua, direction = "both",trace=FALSE)
+summary(step.mod1.gua)
+```
+
+
+```{r}
+#good on the first half
+#residuals vs fitted: The mean is aroundf 0 but variance increasing when predicted values close to zero
+#Q-Q plot fit better during [-2,2] quantiles
+par(mfrow = c(1, 2))
+full.mod1.gualog <- glm(CPHL~.,data=train_nt,family=gaussian(link="log"))
+summary(full.mod1.gualog)
+plot(full.mod1.gualog)
+```
+```{r}
+#r^2 is 0.53
+R.sq <- 1-full.mod1.gualog$deviance/full.mod1.gualog$null.deviance
+R.sq
+```
+
+```{r}
+#didn't drop anything
+step.mod1.gualog<-stepAIC(full.mod1.gualog, direction = "both",trace=FALSE)
+summary(step.mod1.gualog)
+```
+
+
+Model2: 
+Use the assumption made before,using gamma family
+```{r}
+#assumption made before
+#using gamma distribution
+
+#residuals vs fitted: The mean is around 0, variance is changing at -4 and 0 
+#Q-Q plot fit better during [-4,2] quantiles
+par(mfrow = c(1, 2))
+full.mod1.gam <- glm(CPHL~.,data=train_nt,family=Gamma(link="log"))
+summary(full.mod1.gam)
+plot(full.mod1.gam)
+```
+
+```{r}
+#r^2 is 0.62
+R.sq3 <- 1-full.mod1.gam$deviance/full.mod1.gam$null.deviance
+R.sq3
+```
+
+
+Model3:
+Use the assumption we made on the previous two rock model 
+Take log for CPHL
+```{r}
+par(mfrow = c(1, 2))
+#residuals vs fitted: The variance is decreasing
+#Q-Q plot fit better during [-2,2] quantiles
+full.mod1.gau2 <- glm(log(CPHL)~.,data=train_nt)
+summary1<-summary(full.mod1.gau2)
+plot(full.mod1.gau2)
+#0.747
+R.sq6 <- 1-full.mod1.gau2$deviance/full.mod1.gau2$null.deviance
+R.sq6
+```
+
+```{r}
+#didn't drop
+step.mod1.gau3<-stepAIC(full.mod1.gau2, direction = "both",trace=FALSE)
+summary(step.mod1.gau3)
+```
+
+
+```{r}
+library("sn")
+par(mfrow = c(1, 2))
+#based on the density diagram of log(CPHL), it shows left skewness
+#Fitting Linear Models With Skew-Elliptical Error Term  family is skew-normal
+selm.mod<-selm(log(CPHL)~.,data=train_nt)
+summary(selm.mod)
+```
+```{r}
+plot(selm.mod)
+```
+
+```{r}
+#calculate the MSE
+par(mfrow = c(1, 2))
+#calculate the MSE
+#guassian log distribution
+plot(density((test$CPHL)),xlim = c(0,3))
+plot(density(predict(full.mod1.gualog,newdata=test,type="response")))
+cv.glm(train_nt,full.mod1.gualog,K=10)[3]
+pred_gau2<-predict(full.mod1.gualog, test)
+data.frame(RMSE = rmse(test$CPH,pred_gau2),
+            MAE = mae(test$CPHL,pred_gau2),
+           MSE = mse(test$CPHL,pred_gau2))
+```
+
+```{r}
+par(mfrow = c(1, 2))
+#calculate the MSE
+#gamma distribution
+plot(density((test$CPHL)))
+plot(density(predict(full.mod1.gam,newdata=test,type="response")),xlim=c(0,3))
+cv.glm(train_nt,full.mod1.gam,K=10)[3]
+pred_gam<-predict(full.mod1.gam, test)
+data.frame(RMSE = rmse(test$CPHL,pred_gam),
+            MAE = mae(test$CPHL,pred_gam),
+           MSE = mse(test$CPHL,pred_gam))
+```
+
+```{r}
+par(mfrow = c(1, 2))
+#calculate the MSE
+#guassian distribution with log response 
+plot(density(log(test$CPHL)),xlim = c(-3,2))
+plot(density(predict(full.mod1.gau2,newdata=test,type="response")),xlim = c(-3,2))
+cv.glm(train_nt,full.mod1.gau2,K=10)[3]
+pred_gau<-predict(full.mod1.gau2, test)
+data.frame(RMSE = rmse(test$CPHL,pred_gau),
+            MAE = mae(test$CPHL,pred_gau),
+           MSE = mse(test$CPHL,pred_gau))
+```
+```{r}
+#selm model
+par(mfrow = c(1, 2))
+#calculate the MSE
+plot(density(log(test$CPHL)),xlim = c(-3,2))
+plot(density(predict(selm.mod,newdata=test,type="response")),xlim=c(-3,2))
+pred_selm<-predict(selm.mod,test)
+data.frame(RMSE = rmse(pred_selm, test$CPHL),
+            MAE = mae(pred_selm, test$CPHL),
+           MSE = mse(test$CPHL,pred_gau))
+```
+
+Although guassian distribution with log of the response has higher R^2, gamma distribution has lower cross-validation and MSE. Therefore we should choose the one with gamma distribution
+```{r}
+#therefore multicollinearity
+car::vif(full.mod1.gam)
+```
