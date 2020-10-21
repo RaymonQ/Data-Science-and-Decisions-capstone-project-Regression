@@ -1,0 +1,303 @@
+---
+title: "TwoRocks2013"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+rocks2<-read.csv("~/Desktop/TwoRocks20130215.csv", header = TRUE)
+attach(rocks2)
+summary(rocks2)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r}
+drop_rocks <- c("CDOM_quality_control","CNDC_quality_control","CPHL_quality_control"," DEPTH_quality_control", "DOX1_quality_control"," DOX2_quality_control","FID","file_id", "HEAD_quality_control","IRRAD443_quality_control","IRRAD555_quality_control","IRRAD670_quality_control", "LATITUDE_quality_control","LONGITUDE_quality_control","DEPTH_quality_control","DOX2_quality_control","IRRAD490_quality_control","PHASE_quality_control","PROFILE_quality_control","PRES_quality_control","platform_code", "platform_type","PSAL_quality_control","TEMP_quality_control","TIME_quality_control","VBSC_quality_control", "VCUR_GPS_quality_control","deployment_name","time_coverage_start","time_coverage_end","geom")
+Rocks2 <- rocks2[,!(colnames(rocks2)%in%drop_rocks)]
+```
+
+```{r}
+is_char <- lapply(Rocks2,typeof)=="character"
+#### separate the data set by character and numeric 
+numerical_r <- Rocks2[,!is_char]
+categorical_r <- Rocks2[,is_char]
+library("corrplot")
+#correlation diagram
+#assumption: Profile Phase PSal longitude has no or tiny correlation with CPHL
+corrplot(corr = cor(numerical_r))
+```
+```{r}
+sample_size = floor(0.8*nrow(Rocks2))
+set.seed(777)
+# randomly split data in r with 80%training and 20% testing 
+picked = sample(seq_len(nrow(Rocks2)),size = sample_size)
+train =Rocks2[picked,]
+test =Rocks2[-picked,]
+```
+
+
+```{r}
+#we realise there are dates for this dataset 
+#hypothesis: the CPHL growth correlated with times
+#reject hypothesis 
+#starting from 06/03-11/03 
+#short period
+#drop time 
+library("xts")
+library("forecast")
+library("tseries")
+library("zoo")
+library(boot)
+library("MASS")
+library(ModelMetrics)
+traintx <- xts(train[, -1], order.by=as.Date(train$TIME))
+traints<-ts(traintx)
+plot(traintx[,"CPHL"],col="blue")
+```
+
+```{r}
+drop_t <- c("TIME")
+train_nt<- train[,!(colnames(train)%in%drop_t)]
+Rocks_nt<-Rocks2[,!(colnames(Rocks2)%in%drop_t)]
+#heavy right skew, gamma distribution
+hist((Rocks2$CPHL))
+hist((log(Rocks2$CPHL)))
+```
+
+Model1: gaussian distribution
+```{r}
+# fit into a guassian 
+#residuals vs fitted: The mean is S shape 
+#Q-Q plot fit better during [-2,2} quantiles
+par(mfrow = c(1, 2))
+full.mod1.gua <- glm(CPHL~.,data=train_nt)
+summary(full.mod1.gua)
+plot(full.mod1.gua)
+```
+
+```{r}
+#r^2 is 0.55
+R.sq2 <- 1-full.mod1.gua$deviance/full.mod1.gua$null.deviance
+R.sq2
+```
+
+
+```{r}
+#residuals vs fitted: The mean is good on the first half, but the variance  is decreasing 
+#Q-Q plot fit better during [-2,2] quantiles
+par(mfrow = c(1, 2))
+full.mod1.gualog <- glm(CPHL~.,data=train_nt,family=gaussian(link="log"))
+summary(full.mod1.gualog)
+plot(full.mod1.gualog)
+```
+
+```{r}
+#r^2 is 0.63
+R.sq3 <- 1-full.mod1.gualog$deviance/full.mod1.gualog$null.deviance
+R.sq3
+```
+
+
+```{r}
+#Profile Phase PSal longitude has no or tiny correlation with CPHL
+step.mod2.gualog <- glm(CPHL ~ LATITUDE  + PRES + DEPTH + 
+    TEMP + DOX1 + DOX2 + CDOM + CNDC + VBSC + HEAD + IRRAD443 + 
+    IRRAD490 + IRRAD555 + IRRAD670,data=train_nt,family=gaussian(link="log"))
+summary(step.mod2.gualog)
+#reject model2 will use model 1
+anova(full.mod1.gualog,step.mod2.gualog,test="Chisq")
+```
+
+
+```{r}
+#step function to minize our model
+#drop PHASE
+step.mod1.gualog<-stepAIC(full.mod1.gualog, direction = "both",trace=FALSE)
+summary(step.mod1.gualog)
+```
+```{r}
+#perfoms similar as before 
+par(mfrow = c(1, 2))
+plot(step.mod1.gualog)
+```
+```{r}
+#r^2 is 0.63
+R.sq4 <- 1-step.mod1.gualog$deviance/step.mod1.gualog$null.deviance
+R.sq4
+```
+
+```{r}
+#p value is bigger than 5% we can use the second model
+anova(full.mod1.gualog,step.mod1.gualog,test="Chisq")
+```
+
+```{r}
+cv.glm(train_nt,step.mod1.gualog,K=10)[3]
+```
+
+Model2: 
+gamma family
+```{r}
+#assumption made before
+#using gamma distribution
+#residuals vs fitted: The mean of residuals is constant around at zero, but the variance of residuals is decreasing
+#Q-Q plot fit better during [-2,2} quantiles
+par(mfrow = c(1, 2))
+full.mod1.gam <- glm(CPHL~.,data=train_nt,family=Gamma(link = "log"))
+summary(full.mod1.gam)
+plot(full.mod1.gam)
+```
+
+```{r}
+#r^2 is 0.68
+R.sq <- 1-full.mod1.gam$deviance/full.mod1.gam$null.deviance
+R.sq
+```
+
+
+```{r}
+#Profile Phase PSal longitude has no or tiny correlation with CPHL
+step.mod2.gamlog <- glm(CPHL ~ LATITUDE  + PRES + DEPTH + 
+    TEMP + DOX1 + DOX2 + CDOM + CNDC + VBSC + HEAD + IRRAD443 + 
+    IRRAD490 + IRRAD555 + IRRAD670,data=train_nt,family=Gamma(link="log"))
+summary(step.mod2.gamlog)
+#p-value smaller than 5% sign therefore reject model2 will use model 1
+anova(full.mod1.gam,step.mod2.gamlog,test="Chisq")
+```
+
+```{r}
+#step function to minize our model
+#drop Profile IRRAD670
+step.mod1.gam<-stepAIC(full.mod1.gam, direction = "both",trace=FALSE)
+summary(step.mod1.gam)
+```
+
+```{r}
+#r^2 is 0.68
+R.sq5 <- 1-step.mod1.gam$deviance/step.mod1.gam$null.deviance
+R.sq5
+```
+
+```{r}
+#residuals vs fitted: The mean of residuals is constant around at zero, but the variance of residuals is decreasing
+#Q-Q plot fit better during [-2,2} quantiles
+par(mfrow = c(1, 2))
+plot(step.mod1.gam)
+```
+
+
+```{r}
+#P-value is larger than 5% sign. we can use the second model
+anova(full.mod1.gam,step.mod1.gam,test="Chisq")
+```
+
+
+```{r}
+cv.glm(train_nt,step.mod1.gam,K=10)[3]
+```
+
+
+Model3:
+Use the assumption we made on the previous two rock model 
+Take log for CPHL
+```{r}
+hist((log(Rocks2$CPHL)))
+```
+
+```{r}
+#residuals vs fitted: The mean of residuals is constant at zero which satisfy the assumption, but the variance of residuals is changing 
+#Q-Q plot fit better during [-2,4) quantiles
+par(mfrow = c(1, 2))
+full.mod1.gau2 <- glm(log(CPHL)~.,data=train_nt)
+summary1<-summary(full.mod1.gau2)
+plot(full.mod1.gau2)
+#0.65
+R.sq6 <- 1-full.mod1.gau2$deviance/full.mod1.gau2$null.deviance
+R.sq6
+```
+```{r}
+#drop DOX2
+step.mod1.gau3<-stepAIC(full.mod1.gau2, direction = "both",trace=FALSE)
+summary(step.mod1.gau3)
+#we can use the step model
+anova(full.mod1.gau2,step.mod1.gau3,test="Chisq")
+```
+
+
+
+```{r}
+cv.glm(train_nt,step.mod1.gau3,K=10)[3]
+```
+
+Therefore we have three model
+one with the guassian log distribution 
+one with the gamma distribution 
+one is the guassian disrtribution with log response
+We will calculate the MSE and RMSE to judge their performance
+
+```{r}
+#calculate the MSE
+par(mfrow = c(1, 2))
+set.seed(1)
+#calculate the MSE
+#guassian log distribution
+plot(density((test$CPHL)),xlim = c(0,2))
+plot(density(predict(step.mod1.gualog,newdata=test,type="response")))
+pred_gau2<-predict(step.mod1.gualog, test)
+data.frame(RMSE = rmse(test$CPHL,pred_gau2),
+            MAE = mae(test$CPHL,pred_gau2),
+           MSE = mse(test$CPHL,pred_gau2))
+cv.glm(train_nt,step.mod1.gualog,K=10)[3]
+```
+
+```{r}
+par(mfrow = c(1, 2))
+set.seed(1)
+#calculate the MSE
+#gamma log distribution
+plot(density((test$CPHL)),xlim = c(0,2))
+plot(density(predict(step.mod1.gam,newdata=test,type="response")))
+pred_gam<-predict(step.mod1.gam, test)
+data.frame(RMSE = rmse(test$CPHL,pred_gam),
+            MAE = mae(test$CPHL,pred_gam),
+           MSE=mse(test$CPHL,pred_gam))
+cv.glm(train_nt,step.mod1.gam,K=10)[3]
+```
+
+```{r}
+par(mfrow = c(1, 2))
+#calculate the MSE
+#guassian distribution with log on the response
+set.seed(1)
+plot(density(log(test$CPHL)),xlim = c(-3,2))
+plot(density(predict(step.mod1.gau3,newdata=test,type="response")))
+pred_gau<-predict(step.mod1.gau3, test)
+data.frame(RMSE = rmse(test$CPHL,pred_gau),
+            MAE = mae(test$CPHL,pred_gau),
+           MSE = mse(test$CPHL,pred_gau))
+cv.glm(train_nt,step.mod1.gau3,K=10)[3]
+```
+
+
+Therefore model2 performs the best, with the smallest RMSE and MAE and highest R^2.
+```{r}
+summary(step.mod1.gam)
+R.sq5 <- 1-step.mod1.gam$deviance/step.mod1.gam$null.deviance
+R.sq5
+```
+```{r}
+#there exist some variables with VIF > 10, indicating the existence multi-collinearity.
+car::vif(step.mod1.gam)
+```
