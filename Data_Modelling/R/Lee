@@ -1,0 +1,291 @@
+---
+title: "Leeuwin"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+lee<-read.csv("~/Desktop/Leeuwin20131017.csv", header = TRUE)
+attach(lee)
+summary(lee)
+```
+
+
+```{r}
+drop_lee <- c("CDOM_quality_control","CNDC_quality_control","CPHL_quality_control"," DEPTH_quality_control", "DOX1_quality_control"," DOX2_quality_control","FID","file_id", "HEAD_quality_control","IRRAD443_quality_control","IRRAD555_quality_control","IRRAD670_quality_control", "LATITUDE_quality_control","LONGITUDE_quality_control","DEPTH_quality_control","DOX2_quality_control","IRRAD490_quality_control","PHASE_quality_control","PROFILE_quality_control","PRES_quality_control","platform_code", "platform_type","PSAL_quality_control","TEMP_quality_control","TIME_quality_control","VBSC_quality_control", "VCUR_GPS_quality_control","deployment_name","time_coverage_start","time_coverage_end","geom")
+Lee <- lee[,!(colnames(lee)%in%drop_lee)]
+```
+
+
+```{r}
+is_char <- lapply(Lee,typeof)=="character"
+#### separate the data set by character and numeric 
+numerical_r <- Lee[,!is_char]
+categorical_r <- Lee[,is_char]
+```
+
+
+```{r}
+library("corrplot")
+#correlation diagram
+corrplot(corr = cor(numerical_r))
+```
+
+
+```{r}
+sample_size = floor(0.9*nrow(Lee))
+set.seed(777)
+# randomly split data in r with 90%training and 10% testing 
+picked = sample(seq_len(nrow(Lee)),size = sample_size)
+train =Lee[picked,]
+test =Lee[-picked,]
+```
+
+model1: Timeseries model
+```{r}
+library("xts")
+library("forecast")
+library("tseries")
+library("zoo")
+traintx <- xts(train[, -1], order.by=as.Date(train$TIME))
+traints<-ts(traintx)
+```
+
+
+```{r}
+ndiffs(traints[,"CPHL"])
+NewCPHL=diff(traints[,"CPHL"],1)
+```
+
+
+```{r}
+plot(NewCPHL)
+```
+
+
+```{r}
+library("dynlm")
+fit.dynlm=dynlm(NewCPHL~LATITUDE+LONGITUDE+PRES+DEPTH+PROFILE+PHASE+TEMP+PSAL+DOX1+DOX2+CDOM+CNDC+VBSC+HEAD+L(NewCPHL),data=traints)
+```
+
+```{r}
+#performs really bad with only 0.4 R-squared value and residuals vs fitted plot are vary 
+par(mfrow = c(1, 2))
+
+summary(fit.dynlm)
+plot(fit.dynlm)
+```
+
+
+```{r}
+plot(traintx[,"CPHL"],col="blue")
+```
+
+```{r}
+drop_t <- c("TIME")
+train_nt<- train[,!(colnames(train)%in%drop_t)]
+Lee_nt<-Lee[,!(colnames(Lee)%in%drop_t)]
+```
+
+
+```{r}
+plot(lee$CPHL)
+```
+model 2: r^2 only 0.32
+```{r}
+full.mod1.gua <- glm(CPHL~.,data=train_nt)
+summary(full.mod1.gua)
+par(mfrow = c(1, 2))
+
+plot(full.mod1.gua)
+```
+
+```{r}
+R.sq2 <- 1-full.mod1.gua$deviance/full.mod1.gua$null.deviance
+R.sq2
+```
+
+model 3: r^2 only 0.58
+```{r}
+w <- which(train_nt$CPHL==0)
+train_nt <- train_nt[-w,]
+full.mod1.gam <- glm(CPHL~.,data=train_nt,family=Gamma(link = "log"))
+summary(full.mod1.gam)
+par(mfrow = c(1, 2))
+
+plot(full.mod1.gam)
+```
+
+```{r}
+#r^2 is 0.58
+R.sq <- 1-full.mod1.gam$deviance/full.mod1.gam$null.deviance
+R.sq
+```
+
+```{r}
+hist(log(lee$CPHL))
+```
+model 4: r^2 is 0.59
+```{r}
+full.mod1.gau2 <- glm(log(CPHL)~.,data=train_nt)
+summary1<-summary(full.mod1.gau2)
+par(mfrow = c(1, 2))
+
+plot(full.mod1.gau2)
+```
+
+
+```{r}
+anova(full.mod1.gau2,test="Chisq")
+```
+
+```{r}
+R.sq1 <- 1-full.mod1.gau2$deviance/full.mod1.gau2$null.deviance
+R.sq1
+```
+
+drop CNDC, model 5:
+```{r}
+step.mod1.gau2 <- glm(log(CPHL)~LATITUDE+LONGITUDE+PRES+DEPTH+PROFILE+TEMP+PSAL+DOX1+DOX2+CDOM+VBSC+HEAD,data=train_nt)
+summary2<-summary(step.mod1.gau2)
+par(mfrow = c(1, 2))
+
+plot(step.mod1.gau2)
+```
+
+
+```{r}
+anova(full.mod1.gau2,step.mod1.gau2,test="Chisq")
+```
+
+```{r}
+library("MASS")
+step.mod1.gau3<-stepAIC(full.mod1.gau2, direction = "both",trace=FALSE)
+summary(step.mod1.gau3)
+```
+
+for model 4, we can see that there are some points with high leverage highly influence this model. so we need to drop them.
+
+model 6: r^2 is 0.6
+```{r}
+train_nt[3192,]
+train_nt[21560,]
+train_nt[58081,]
+
+HighLeverage <- cooks.distance(full.mod1.gau2) > 0.5
+LargeResiduals <- rstudent(full.mod1.gau2) < -6
+train_nt <- train_nt[!HighLeverage & !LargeResiduals,]
+full.mod1.gau2no <- glm(log(CPHL)~.,data=train_nt)
+summary1<-summary(full.mod1.gau2no)
+par(mfrow = c(1, 2))
+
+plot(full.mod1.gau2no)
+```
+
+
+```{r}
+R.sq2 <- 1-full.mod1.gau2no$deviance/full.mod1.gau2no$null.deviance
+R.sq2
+```
+
+model 7: r^2 is 0.323
+```{r}
+library(mgcv)
+gam1 <- gam(CPHL~LATITUDE+LONGITUDE+PRES+DEPTH+PROFILE+PHASE+TEMP+PSAL+DOX1+DOX2+CDOM+CNDC+VBSC+HEAD,data=train_nt)
+summary(gam1)
+```
+
+drop CNDC
+```{r}
+gam2 <- gam(CPHL~LATITUDE+LONGITUDE+PRES+DEPTH+PROFILE+PHASE+TEMP+PSAL+DOX1+DOX2+CDOM+VBSC+HEAD,data=train_nt)
+summary(gam2)
+```
+
+r^2 is still too small.
+
+model 8:
+```{r}
+gam3 <- gam(log(CPHL)~LATITUDE+LONGITUDE+PRES+DEPTH+PROFILE+PHASE+TEMP+PSAL+DOX1+DOX2+CDOM+CNDC+VBSC+HEAD,data=train_nt)
+summary(gam3)
+```
+
+drop CNDC:
+model 9:r^2 is 0.6
+```{r}
+gam4 <- gam(log(CPHL)~LATITUDE+LONGITUDE+PRES+DEPTH+PROFILE+PHASE+TEMP+PSAL+DOX1+DOX2+CDOM+VBSC+HEAD,data=train_nt)
+summary(gam4)
+```
+
+
+```{r}
+gam9 <- gam(log(CPHL)~PRES+DEPTH+PROFILE+PHASE+TEMP+PSAL+DOX1+DOX2+CDOM+VBSC+HEAD,data=train_nt)
+summary(gam9)
+anova(gam9,gam4,test="Chisq")
+
+```
+
+
+
+
+
+
+
+```{r}
+anova(gam3,gam4,test="Chisq")
+```
+
+from this result, we should drop CNDC.
+
+now we need to compare model 6 and model 9.
+model 6:full.mod1.gau2no <- glm(log(CPHL)~.,data=train_nt)
+model 9:gam4 <- gam(log(CPHL)~LATITUDE+LONGITUDE+PRES+DEPTH+PROFILE+PHASE+TEMP+PSAL+DOX1+DOX2+CDOM+VBSC+HEAD,data=train_nt)
+```{r}
+library("pROC")
+test_gam4 = predict.gam(gam4, newdata = train_nt, type = "response")
+test_roc1 = roc(train_nt$CPHL ~ test_gam4, plot = TRUE, print.auc = TRUE)
+```
+```{r}
+test_model6 = predict.glm(full.mod1.gau2no, newdata = train_nt, type = "response")
+test_roc2 = roc(train_nt$CPHL ~ test_model6, plot = TRUE, print.auc = TRUE)
+```
+
+```{r}
+#calculate the MSE
+par(mfrow = c(1, 2))
+#calculate the MSE
+plot(density(log(test$CPHL)),xlim = c(-4,0))
+plot(density(predict(full.mod1.gau2no,newdata=test,type="response")))
+pred_gau2<-predict(full.mod1.gau2no, test)
+```
+
+
+```{r}
+par(mfrow = c(1, 2))
+plot(density(log(test$CPHL)),xlim = c(-4,0))
+plot(density(predict(gam4,newdata=test,type="response")))
+pred_gau3<-predict(gam4, test)
+```
+```{r}
+library(ModelMetrics)
+data.frame(RMSE = rmse(pred_gau2, test$CPHL),
+            MAE = mae(pred_gau2, test$CPHL))
+```
+
+
+```{r}
+data.frame(RMSE = rmse(pred_gau3, test$CPHL),
+            MAE = mae(pred_gau3, test$CPHL))
+```
+
+hence, model 6 is our final model.
+
+
+
+
+
+
+
+
