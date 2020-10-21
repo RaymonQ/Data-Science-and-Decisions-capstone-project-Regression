@@ -1,0 +1,237 @@
+---
+title: "TworocksModeling"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+rocks<-read.csv("~/Desktop/TwoRocks20140808.csv", header = TRUE)
+attach(rocks)
+summary(rocks)
+```
+
+
+```{r}
+#drop the irrelatvant data
+#quality control is all 1 so we can delete it straight away and time coverage start and end performs the same thing for whole data set 
+drop_rocks <- c("CDOM_quality_control","CNDC_quality_control","CPHL_quality_control"," DEPTH_quality_control", "DOX1_quality_control"," DOX2_quality_control","FID","file_id", "HEAD_quality_control","IRRAD443_quality_control","IRRAD555_quality_control","IRRAD670_quality_control", "LATITUDE_quality_control","LONGITUDE_quality_control","DEPTH_quality_control","DOX2_quality_control","IRRAD490_quality_control","PHASE_quality_control","PROFILE_quality_control","PRES_quality_control","platform_code", "platform_type","PSAL_quality_control","TEMP_quality_control","TIME_quality_control","VBSC_quality_control", "VCUR_GPS_quality_control","deployment_name","time_coverage_start","time_coverage_end","geom")
+Rocks <- rocks[,!(colnames(rocks)%in%drop_rocks)]
+```
+
+```{r}
+is_char <- lapply(Rocks,typeof)=="character"
+#### separate the data set by character and numeric 
+numerical_r <- Rocks[,!is_char]
+categorical_r <- Rocks[,is_char]
+```
+
+```{r}
+library("corrplot")
+#correlation diagram
+corrplot(corr = cor(numerical_r))
+```
+
+```{r}
+sample_size = floor(0.8*nrow(Rocks))
+set.seed(777)
+# randomly split data in r with 80% training and 20% testing 
+picked = sample(seq_len(nrow(Rocks)),size = sample_size)
+train =Rocks[picked,]
+test =Rocks[-picked,]
+```
+
+```{r}
+#we realise there are dates for this dataset 
+#hypothesis: the CPHL growth correlated with times
+#model1: Timeseries model
+library("xts")
+library("forecast")
+library("tseries")
+library("zoo")
+traintx <- xts(train[, -1], order.by=as.Date(train$TIME))
+traints<-ts(traintx)
+```
+
+
+```{r}
+#Data only contains 08/08/14-24/08/14 
+#Too few days, not enough information too carry out 
+#drop it
+plot(traintx[,"CPHL"],col="blue")
+```
+
+```{r}
+drop_t <- c("TIME")
+train_nt<- train[,!(colnames(train)%in%drop_t)]
+Rocks_nt<-Rocks[,!(colnames(Rocks)%in%drop_t)]
+```
+
+```{r}
+#first assumption made: gamma distribution 
+hist(rocks$CPHL)
+```
+
+```{r}
+# normal QQ plot has heavy right tail
+# might be a gamma distribution
+par(mfrow = c(1, 2))
+full.mod1.gua <- glm(CPHL~.,data=train_nt)
+summary(full.mod1.gua)
+plot(full.mod1.gua)
+```
+```{r}
+#guassian distribution: r^2 is 0.54
+R.sq2 <- 1-full.mod1.gua$deviance/full.mod1.gua$null.deviance
+R.sq2
+```
+```{r}
+# residual vs fitted looks better 
+par(mfrow = c(1, 2))
+full.mod1.gualog <- glm(CPHL~.,family = gaussian(link="log"),data=train_nt)
+summary(full.mod1.gualog)
+plot(full.mod1.gualog)
+```
+```{r}
+#guassian distribution: r^2 is 0.53
+R.sq4 <- 1-full.mod1.gualog$deviance/full.mod1.gualog$null.deviance
+R.sq4
+```
+```{r}
+#Still have a heavy tail on QQ plot and variance are changing  
+#may need some transformations
+par(mfrow = c(1, 2))
+full.mod1.gam <- glm(CPHL~.,data=train_nt,family=Gamma(link = "log"))
+summary(full.mod1.gam)
+plot(full.mod1.gam)
+```
+```{r}
+#r^2 is 0.63
+R.sq <- 1-full.mod1.gam$deviance/full.mod1.gam$null.deviance
+R.sq
+```
+```{r}
+#taking log for the CPHL value 
+#Might be a normal distribution in that case 
+hist(log(rocks$CPHL))
+```
+
+```{r}
+#heavy right tail is reduce 
+#QQ plot shows that the model performs better in theroetical quantiles(-2,2)
+par(mfrow = c(1, 2))
+full.mod1.gau2 <- glm(log(CPHL)~.,data=train_nt)
+summary1<-summary(full.mod1.gau2)
+plot(full.mod1.gau2)
+```
+
+```{r}
+#We see that the PHASE has large p-value
+#maybe we can drop it 
+anova(full.mod1.gau2,test="Chisq")
+```
+
+```{r}
+#anova table shows us the Phase might not be significant and correlation plot shows that CPHL has no or tiny correlation with PHASE LATITUDE and HEAD 
+#model without those three 
+par(mfrow = c(1, 2))
+step.mod1.gau2 <- glm(log(CPHL)~LONGITUDE+PRES+DEPTH+PROFILE+TEMP+PSAL+DOX1+DOX2+CDOM+CNDC+VBSC+IRRAD443+IRRAD490+IRRAD555+IRRAD670,data=train_nt)
+summary2<-summary(step.mod1.gau2)
+plot(step.mod1.gau2)
+```
+
+```{r}
+#we should use the full model,p-value is small
+anova(full.mod1.gau2,step.mod1.gau2,test="Chisq")
+```
+
+```{r}
+library("MASS")
+#use step function to minimize our model
+#seems to be the same full model
+step.mod1.gau3<-stepAIC(full.mod1.gau2, direction = "both",trace=FALSE)
+summary(step.mod1.gau3)
+```
+
+```{r}
+#r squared value is 0.67
+R.sq1 <- 1-full.mod1.gau2$deviance/full.mod1.gau2$null.deviance
+R.sq1
+```
+
+
+
+Trying to fit into another model which deal with the skewness on the left 
+```{r}
+library(boot)
+set.seed(1) 
+#The first component is the raw cross-validation estimate of prediction error. The second component is the adjusted cross-validation estimate. The adjustment is designed to compensate for the bias introduced by not using leave-one-out cross-validation.
+cv.glm(train_nt,full.mod1.gau2,K=10)$delta
+```
+
+
+
+
+
+```{r}
+library("sn")
+#based on the density diagram of log(CPHL), it shows left skewness
+#Fitting Linear Models With Skew-Elliptical Error Term  family is skew-normal
+selm.mod<-selm(log(CPHL)~.,data=train_nt)
+summary(selm.mod)
+```
+
+```{r}
+par(mfrow = c(1, 2))
+plot(selm.mod)
+```
+
+  
+
+Analysis
+
+
+```{r}
+library(ModelMetrics)
+#calculate the MSE
+#response with log and gaussian family
+par(mfrow = c(1, 2))
+#calculate the MSE
+plot(density(log(test$CPHL)),xlim = c(-3,2))
+plot(density(predict(full.mod1.gau2,newdata=test,type="response")))
+pred_gau2<-predict(full.mod1.gau2, test)
+data.frame(RMSE = rmse(test$CPHL,pred_gau2),
+            MAE = mae(test$CPHL,pred_gau2),
+            MSE=mse(test$CPHL,pred_gau2))
+```
+
+```{r}
+##selm model
+par(mfrow = c(1, 2))
+#calculate the MSE
+plot(density(log(test$CPHL)),xlim = c(-3,2))
+pred_selm<-predict(selm.mod,test)
+plot(density(pred_selm))
+data.frame(RMSE = rmse(test$CPHL,pred_selm),
+            MAE = mae(test$CPHL,pred_selm),
+            MSE = mse(test$CPHL,pred_selm))
+
+```
+We see that selm performs similarly with glm model, therefore there is no reason we should use a model that we are not familiar with.
+Our final model is 
+```{r}
+summary(full.mod1.gau2)
+#VIF>10, it has multicollinearity
+car::vif(full.mod1.gau2)
+```
+
