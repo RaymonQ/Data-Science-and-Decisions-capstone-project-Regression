@@ -1,0 +1,566 @@
+---
+title: "TwoRocks2014"
+output:
+  html_document:
+    df_print: paged
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+```{r}
+rocks<-read.csv("~/Desktop/TwoRocks20140808.csv", header = TRUE)
+attach(rocks)
+summary(rocks)
+```
+
+```{r}
+#drop the irrelatvant data
+#quality control is all 1 so we can delete it straight away and time coverage start and end performs the same thing for whole data set 
+drop_rocks <- c("CDOM_quality_control","CNDC_quality_control","CPHL_quality_control"," DEPTH_quality_control", "DOX1_quality_control"," DOX2_quality_control","FID","file_id", "HEAD_quality_control","IRRAD443_quality_control","IRRAD555_quality_control","IRRAD670_quality_control", "LATITUDE_quality_control","LONGITUDE_quality_control","DEPTH_quality_control","DOX2_quality_control","IRRAD490_quality_control","PHASE_quality_control","PROFILE_quality_control","PRES_quality_control","platform_code", "platform_type","PSAL_quality_control","TEMP_quality_control","TIME_quality_control","VBSC_quality_control", "VCUR_GPS_quality_control","deployment_name","time_coverage_start","time_coverage_end","geom")
+Rocks <- rocks[,!(colnames(rocks)%in%drop_rocks)]
+```
+
+```{r}
+is_char <- lapply(Rocks,typeof)=="character"
+#### separate the data set by character and numeric 
+numerical_r <- Rocks[,!is_char]
+categorical_r <- Rocks[,is_char]
+```
+
+```{r}
+library("corrplot")
+#correlation diagram
+corrplot(corr = cor(numerical_r))
+```
+
+```{r}
+sample_size = floor(0.8*nrow(Rocks))
+set.seed(777)
+# randomly split data in r with 80% training and 20% testing 
+picked = sample(seq_len(nrow(Rocks)),size = sample_size)
+train =Rocks[picked,]
+test =Rocks[-picked,]
+```
+
+```{r}
+#we realise there are dates for this dataset 
+#hypothesis: the CPHL growth correlated with times
+#model1: Timeseries model
+library("xts")
+library("forecast")
+library("tseries")
+library("zoo")
+library("boot")
+traintx <- xts(train[, -1], order.by=as.Date(train$TIME))
+traints<-ts(traintx)
+```
+
+
+```{r}
+#Data only contains 08/08/14-24/08/14 
+#Too few days, not enough information too carry out 
+#drop it
+plot(traintx[,"CPHL"],col="blue")
+```
+
+```{r}
+drop_t <- c("TIME")
+train_nt<- train[,!(colnames(train)%in%drop_t)]
+Rocks_nt<-Rocks[,!(colnames(Rocks)%in%drop_t)]
+```
+
+```{r}
+#first assumption made: gamma distribution 
+hist(rocks$CPHL,xlim=c(0,2),breaks=200,prob=TRUE)
+curve(dgamma(x,shape=mean(train_nt$CPHL)^2/var(train_nt$CPHL),scale=var(train_nt$CPHL)/mean(train_nt$CPHL)),add=TRUE,col="red")
+lines(density(rocks$CPHL),add=TRUE)
+```
+
+```{r}
+#Still have a heavy tail on QQ plot and variance are changing  
+#may need some transformations
+par(mfrow = c(1, 2))
+full.mod1.gam <- glm(CPHL~.,data=train_nt,family=Gamma(link = "log"))
+summary(full.mod1.gam)
+plot(full.mod1.gam)
+```
+
+```{r}
+#r^2 is 0.63
+R.sq <- 1-full.mod1.gam$deviance/full.mod1.gam$null.deviance
+R.sq
+```
+
+```{r}
+library(ModelMetrics)
+#calculate the MSE
+#response with log and gaussian family
+par(mfrow = c(1, 2))
+#calculate the MSE
+plot(density(test$CPHL),xlim = c(0,2))
+plot(density(predict(full.mod1.gam,newdata=test,type="response")),xlim = c(0,2))
+pred_gam<-predict(full.mod1.gam, test)
+data.frame(RMSE = rmse(test$CPHL,pred_gam),
+            MAE = mae(test$CPHL,pred_gam),
+            MSE=mse(test$CPHL,pred_gam))
+```
+```{r}
+pred_gam<-abs(pred_gam)
+```
+
+```{r}
+#first assumption made: gamma distribution 
+hist(test$CPHL,xlim=c(0,3),breaks=200,prob=TRUE)
+curve(dgamma(x,shape=mean(test$CPHL)^2/var(test$CPHL),scale=var(test$CPHL)/mean(test$CPHL)),add=TRUE,col="blue")
+curve(dgamma(x,shape=mean(pred_gam)^2/var(pred_gam),scale=var(pred_gam)/mean(pred_gam)),add=TRUE,lty=2,col="red")
+
+```
+
+```{r}
+
+#VIF>10, it has multicollinearity
+car::vif(full.mod1.gam)
+```
+
+```{r}
+step.mod.gam<-glm(CPHL~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670,family=Gamma(link = "log"),data=train_nt)
+car::vif(step.mod.gam)
+```
+
+```{r}
+pred_gam1<-predict(step.mod.gam, test)
+pred_gam1<-abs(pred_gam1)
+```
+
+
+```{r}
+#first assumption made: gamma distribution 
+hist(test$CPHL,xlim=c(0,3),breaks=200,prob=TRUE)
+curve(dgamma(x,shape=mean(test$CPHL)^2/var(test$CPHL),scale=var(test$CPHL)/mean(test$CPHL)),add=TRUE,col="blue")
+curve(dgamma(x,shape=mean(pred_gam1)^2/var(pred_gam1),scale=var(pred_gam1)/mean(pred_gam1)),add=TRUE,lty=2,col="red")
+```
+
+```{r}
+step.mod.gam1<-glm(CPHL~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+PRES,family=Gamma(link = "log"),data=train_nt)
+car::vif(step.mod.gam1)
+```
+```{r}
+pred_gam2<-predict(step.mod.gam1, test)
+pred_gam2<-abs(pred_gam2)
+```
+
+```{r}
+#first assumption made: gamma distribution 
+hist(test$CPHL,xlim=c(0,3),breaks=200,prob=TRUE)
+curve(dgamma(x,shape=mean(test$CPHL)^2/var(test$CPHL),scale=var(test$CPHL)/mean(test$CPHL)),add=TRUE,col="blue")
+curve(dgamma(x,shape=mean(pred_gam2)^2/var(pred_gam2),scale=var(pred_gam2)/mean(pred_gam2)),add=TRUE,lty=2,col="red")
+```
+
+```{r}
+#VIF increase we should not add depth and pres together 
+step.mod.gam2<-glm(CPHL~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+PRES+DEPTH,family=Gamma(link = "log"),data=train_nt)
+car::vif(step.mod.gam2)
+```
+
+```{r}
+#VIF increase we should not add depth and pres together 
+step.mod.gam3<-glm(CPHL~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+DEPTH,family=Gamma(link = "log"),data=train_nt)
+car::vif(step.mod.gam3)
+```
+
+```{r}
+#cv gives us similar results
+set.seed(1)
+cv.glm(train_nt,step.mod.gam1,K=10)$delta
+```
+```{r}
+#we will choose the one with lower cv value 
+#therefore we will add pres
+set.seed(1)
+cv.glm(train_nt,step.mod.gam3,K=10)$delta
+```
+
+```{r}
+#VIF increase we should not add depth and pres together 
+step.mod.gam4<-glm(CPHL~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+DEPTH+TEMP,family=Gamma(link = "log"),data=train_nt)
+car::vif(step.mod.gam4)
+```
+```{r}
+pred_gam4<-predict(step.mod.gam4, test)
+pred_gam4<-abs(pred_gam4)
+```
+
+```{r}
+#first assumption made: gamma distribution 
+hist(test$CPHL,xlim=c(0,3),breaks=200,prob=TRUE)
+curve(dgamma(x,shape=mean(test$CPHL)^2/var(test$CPHL),scale=var(test$CPHL)/mean(test$CPHL)),add=TRUE,col="blue")
+curve(dgamma(x,shape=mean(pred_gam4)^2/var(pred_gam4),scale=var(pred_gam4)/mean(pred_gam4)),add=TRUE,lty=2,col="red")
+```
+```{r}
+#VIF increase we should not add depth and pres together 
+step.mod.gam6<-glm(CPHL~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+DEPTH+TEMP+PSAL,family=Gamma(link = "log"),data=train_nt)
+car::vif(step.mod.gam6)
+```
+```{r}
+pred_gam6<-predict(step.mod.gam6, test)
+pred_gam6<-abs(pred_gam6)
+```
+
+```{r}
+#first assumption made: gamma distribution 
+hist(test$CPHL,xlim=c(0,3),breaks=200,prob=TRUE)
+curve(dgamma(x,shape=mean(test$CPHL)^2/var(test$CPHL),scale=var(test$CPHL)/mean(test$CPHL)),add=TRUE,col="blue")
+curve(dgamma(x,shape=mean(pred_gam6)^2/var(pred_gam6),scale=var(pred_gam6)/mean(pred_gam6)),add=TRUE,lty=2,col="red")
+```
+```{r}
+#VIF increase we should not add depth and pres together 
+step.mod.gam7<-glm(CPHL~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+DEPTH+TEMP+PSAL+CNDC,family=Gamma(link = "log"),data=train_nt)
+car::vif(step.mod.gam7)
+```
+
+
+```{r}
+#VIF increase we should not add depth and pres together 
+step.mod.gam8<-glm(CPHL~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+DEPTH+PSAL+CNDC,family=Gamma(link = "log"),data=train_nt)
+car::vif(step.mod.gam8)
+```
+```{r}
+#cv give us similar result
+#choose the lower one 
+# we add CNDC
+set.seed(1)
+cv.glm(train_nt,step.mod.gam6,K=10)$delta
+cv.glm(train_nt,step.mod.gam8,K=10)$delta
+```
+```{r}
+pred_gam8<-predict(step.mod.gam8, test)
+pred_gam8<-abs(pred_gam8)
+```
+
+```{r}
+#first assumption made: gamma distribution 
+hist(test$CPHL,xlim=c(0,3),breaks=200,prob=TRUE)
+curve(dgamma(x,shape=mean(test$CPHL)^2/var(test$CPHL),scale=var(test$CPHL)/mean(test$CPHL)),add=TRUE,col="blue")
+curve(dgamma(x,shape=mean(pred_gam8)^2/var(pred_gam8),scale=var(pred_gam8)/mean(pred_gam8)),add=TRUE,lty=2,col="red")
+```
+```{r}
+#VIF increase we should not add depth and pres together 
+step.mod.gam10<-glm(CPHL~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+DEPTH+PSAL+TEMP+IRRAD443   ,family=Gamma(link = "log"),data=train_nt)
+car::vif(step.mod.gam10)
+```
+```{r}
+pred_gam10<-predict(step.mod.gam10, test)
+pred_gam10<-abs(pred_gam10)
+```
+
+```{r}
+#first assumption made: gamma distribution 
+hist(test$CPHL,xlim=c(0,3),breaks=200,prob=TRUE)
+curve(dgamma(x,shape=mean(test$CPHL)^2/var(test$CPHL),scale=var(test$CPHL)/mean(test$CPHL)),add=TRUE,col="blue")
+curve(dgamma(x,shape=mean(pred_gam10)^2/var(pred_gam10),scale=var(pred_gam10)/mean(pred_gam10)),add=TRUE,lty=2,col="red")
+```
+```{r}
+#VIF increase we should not add depth and pres together 
+step.mod.gam11<-glm(CPHL~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+DEPTH+PSAL+TEMP+IRRAD443+ IRRAD490   ,family=Gamma(link = "log"),data=train_nt)
+car::vif(step.mod.gam11)
+```
+```{r}
+#VIF increase we should not add depth and pres together 
+step.mod.gam12<-glm(CPHL~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+DEPTH+PSAL+TEMP+ IRRAD490   ,family=Gamma(link = "log"),data=train_nt)
+car::vif(step.mod.gam12)
+```
+```{r}
+#choose gam10
+set.seed(1)
+cv.glm(train_nt,step.mod.gam10,K=10)$delta
+cv.glm(train_nt,step.mod.gam12,K=10)$delta
+```
+
+```{r}
+#VIF increase we should not add depth and pres together 
+step.mod.gam13<-glm(CPHL~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+DEPTH+PSAL+TEMP+IRRAD443+IRRAD555  ,family=Gamma(link = "log"),data=train_nt)
+car::vif(step.mod.gam13)
+```
+
+```{r}
+#VIF increase we should not add depth and pres together 
+step.mod.gam14<-glm(CPHL~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+DEPTH+PSAL+TEMP+IRRAD555  ,family=Gamma(link = "log"),data=train_nt)
+car::vif(step.mod.gam14)
+```
+
+```{r}
+#choose gam10
+set.seed(1)
+cv.glm(train_nt,step.mod.gam10,K=10)$delta
+cv.glm(train_nt,step.mod.gam13,K=14)$delta
+```
+
+```{r}
+#first assumption made: gamma distribution 
+hist(test$CPHL,xlim=c(0,3),breaks=200,prob=TRUE)
+curve(dgamma(x,shape=mean(test$CPHL)^2/var(test$CPHL),scale=var(test$CPHL)/mean(test$CPHL)),add=TRUE,col="blue")
+curve(dgamma(x,shape=mean(pred_gam10)^2/var(pred_gam10),scale=var(pred_gam10)/mean(pred_gam10)),add=TRUE,lty=2,col="red")
+```
+```{r}
+vif_gam<-car::vif(step.mod.gam10)
+b_h_p <- barplot(vif_gam,las=3,ylim = c(0,14))
+text(b_h_p,vif_gam+10,round(vif_gam,1),cex=0.8) 
+abline(h=10,lty=1,col="red")
+```
+
+```{r}
+par(mfrow = c(1, 2))
+#calculate the MSE
+plot(density(test$CPHL),xlim = c(0,2))
+plot(density(pred_gam10),xlim = c(0,2))
+data.frame(RMSE = rmse(test$CPHL,pred_gam10),
+            MAE = mae(test$CPHL,pred_gam10),
+            MSE=mse(test$CPHL,pred_gam10))
+```
+
+```{r}
+par(mfrow = c(1, 2))
+plot(step.mod.gam10) 
+```
+```{r}
+#bootstrap suggests estimator is consistent with the predictor estimate from the summary output, also we notice the difference of standard error from bootstrap and standard error from summary output generally not exceed 10%. 
+#a good correspondence between bootstrap estimate and standard estimate in Gamma GLM, implies that this model is not over optimistic about the performance.
+formula(step.mod.gam10) 
+boot.gam_pit<-function(dataset,rows.used){
+return(coef(glm(CPHL ~ LATITUDE + LONGITUDE + PROFILE + PHASE + DOX1 + DOX2 + 
+    CDOM + VBSC + HEAD + IRRAD670 + DEPTH + PSAL + TEMP + IRRAD443,family=Gamma(link="log"),data=train_nt, subset = rows.used)))
+} 
+boot(train_nt,boot.gam_pit,R=100) 
+summary(step.mod.gam10)
+```
+
+```{r}
+#taking log for the CPHL value 
+#Might be a normal distribution in that case 
+hist(log(rocks$CPHL),prob=TRUE,breaks=200)
+curve(dnorm(x,mean=mean(log(rocks$CPHL)),sd=sd(log(rocks$CPHL))),add=TRUE,col="red")
+```
+
+```{r}
+#heavy right tail is reduce 
+#QQ plot shows that the model performs better in theroetical quantiles(-2,2)
+par(mfrow = c(1, 2))
+full.mod1.gau2 <- glm(log(CPHL)~.,data=train_nt)
+summary1<-summary(full.mod1.gau2)
+plot(full.mod1.gau2)
+car::vif(full.mod1.gau2)
+```
+```{r}
+step.mod.gau<-glm(log(CPHL)~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670,data=train_nt)
+car::vif(step.mod.gau)
+```
+```{r}
+#beginning we see the result from our step model with only VIF<10 
+#we see that the peak contains huge difference
+pred_step<-predict(step.mod.gau)
+hist(log(test$CPHL),probability = TRUE,xlim = c(-2,1),ylim=c(0,2),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step),sd=sd(pred_step)),add=TRUE,lty=2,col="red")
+#curve(dnorm(x,shape=mean(test$CPHL)^2/var(test$CPHL),scale=var(test$CPHL)/mean(test$CPHL)),add=TRUE,col="blue")
+#curve(dgamma(x,shape=mean(pred_gam)^2/var(pred_gam),scale=var(pred_gam)/mean(pred_gam)),add=TRUE,col="red")
+```
+
+```{r}
+step.mod.gau1<-glm(log(CPHL)~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+DEPTH,data=train_nt)
+car::vif(step.mod.gau1)
+```
+
+```{r}
+#beginning we see the result from our step model with only VIF<10 
+#we see that the peak contains smaller difference
+pred_step1<-predict(step.mod.gau1)
+hist(log(test$CPHL),probability = TRUE,xlim = c(-2,1),ylim=c(0,2),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step1),sd=sd(pred_step1)),add=TRUE,lty=2,col="red")
+#curve(dnorm(x,shape=mean(test$CPHL)^2/var(test$CPHL),scale=var(test$CPHL)/mean(test$CPHL)),add=TRUE,col="blue")
+#curve(dgamma(x,shape=mean(pred_gam)^2/var(pred_gam),scale=var(pred_gam)/mean(pred_gam)),add=TRUE,col="red")
+```
+
+```{r}
+step.mod.gau2<-glm(log(CPHL)~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+DEPTH+PRES,data=train_nt)
+car::vif(step.mod.gau2)
+```
+```{r}
+#beginning we see the result from our step model with only VIF<10 
+#we see that the peak contains smaller difference
+pred_step2<-predict(step.mod.gau2)
+hist(log(test$CPHL),probability = TRUE,xlim = c(-2,1),ylim=c(0,2),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step2),sd=sd(pred_step2)),add=TRUE,lty=2,col="red")
+#curve(dnorm(x,shape=mean(test$CPHL)^2/var(test$CPHL),scale=var(test$CPHL)/mean(test$CPHL)),add=TRUE,col="blue")
+#curve(dgamma(x,shape=mean(pred_gam)^2/var(pred_gam),scale=var(pred_gam)/mean(pred_gam)),add=TRUE,col="red")
+```
+
+```{r}
+step.mod.gau3<-glm(log(CPHL)~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+PRES,data=train_nt)
+car::vif(step.mod.gau3)
+```
+```{r}
+#cv gives us similar results
+set.seed(1)
+cv.glm(train_nt,step.mod.gau1,K=10)$delta
+```
+```{r}
+#we will choose the one with lower cv value 
+#therefore we will add pres
+set.seed(1)
+cv.glm(train_nt,step.mod.gau3,K=10)$delta
+```
+```{r}
+pred_step3<-predict(step.mod.gau3)
+hist(log(test$CPHL),probability = TRUE,xlim = c(-2,1),ylim=c(0,2),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step3),sd=sd(pred_step3)),add=TRUE,lty=2,col="red")
+#curve(dnorm(x,shape=mean(test$CPHL)^2/var(test$CPHL),scale=var(test$CPHL)/mean(test$CPHL)),add=TRUE,col="blue")
+#curve(dgamma(x,shape=mean(pred_gam)^2/var(pred_gam),scale=var(pred_gam)/mean(pred_gam)),add=TRUE,col="red")
+```
+
+```{r}
+#add temp 
+#vif < 10
+step.mod.gau4<-glm(log(CPHL)~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+DEPTH+TEMP,data=train_nt)
+car::vif(step.mod.gau4)
+```
+```{r}
+#beginning we see the result from our step model with only VIF<10 
+#we see that the peak contains smaller difference
+pred_step4<-predict(step.mod.gau4)
+hist(log(test$CPHL),probability = TRUE,xlim = c(-2,1),ylim=c(0,2),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step4),sd=sd(pred_step4)),add=TRUE,lty=2,col="red")
+#curve(dnorm(x,shape=mean(test$CPHL)^2/var(test$CPHL),scale=var(test$CPHL)/mean(test$CPHL)),add=TRUE,col="blue")
+#curve(dgamma(x,shape=mean(pred_gam)^2/var(pred_gam),scale=var(pred_gam)/mean(pred_gam)),add=TRUE,col="red")
+```
+```{r}
+#add psal
+#vif<10
+step.mod.gau5<-glm(log(CPHL)~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+DEPTH+HEAD+IRRAD670+TEMP+PSAL,data=train_nt)
+car::vif(step.mod.gau5)
+```
+
+```{r}
+#if add CNDC, it will affect temp pres psal 
+#from correlation diagram we see temp is highly correlated with CNDC
+step.mod.gau6<-glm(log(CPHL)~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+DEPTH+TEMP+PSAL+CNDC,data=train_nt)
+car::vif(step.mod.gau6)
+```
+```{r}
+#add CNDC instead of temp
+step.mod.gau7<-glm(log(CPHL)~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+DEPTH+TEMP+PSAL,data=train_nt)
+car::vif(step.mod.gau7)
+```
+
+```{r}
+#cv give us similar result
+#choose the lower one 
+# we add CNDC
+set.seed(1)
+cv.glm(train_nt,step.mod.gau5,K=10)$delta
+cv.glm(train_nt,step.mod.gau7,K=10)$delta
+```
+```{r}
+pred_step5<-predict(step.mod.gau5)
+hist(log(test$CPHL),probability = TRUE,xlim = c(-2,1),ylim=c(0,2),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step5),sd=sd(pred_step5)),add=TRUE,lty=2,col="red")
+#curve(dnorm(x,shape=mean(test$CPHL)^2/var(test$CPHL),scale=var(test$CPHL)/mean(test$CPHL)),add=TRUE,col="blue")
+#curve(dgamma(x,shape=mean(pred_gam)^2/var(pred_gam),scale=var(pred_gam)/mean(pred_gam)),add=TRUE,col="red")
+```
+
+```{r}
+pred_step7<-predict(step.mod.gau7)
+hist(log(test$CPHL),probability = TRUE,xlim = c(-2,1),ylim=c(0,2),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step7),sd=sd(pred_step7)),add=TRUE,lty=2,col="red")
+
+#curve(dnorm(x,shape=mean(test$CPHL)^2/var(test$CPHL),scale=var(test$CPHL)/mean(test$CPHL)),add=TRUE,col="blue")
+#curve(dgamma(x,shape=mean(pred_gam)^2/var(pred_gam),scale=var(pred_gam)/mean(pred_gam)),add=TRUE,col="red")
+```
+
+```{r}
+#add IRRAD443
+step.mod.gau8<-glm(log(CPHL)~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+DEPTH+TEMP+PSAL+IRRAD443,data=train_nt)
+car::vif(step.mod.gau8)
+```
+
+```{r}
+#by adding irrad490 it will highly affected our model
+#from correlation plot we see irrad490 and irrad443 is highly correlated
+#choose one of them
+step.mod.gau9<-glm(log(CPHL)~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+DEPTH+TEMP+PSAL+IRRAD443+ IRRAD490 ,data=train_nt)
+car::vif(step.mod.gau9)
+```
+```{r}
+step.mod.gau10<-glm(log(CPHL)~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+DEPTH+TEMP+PSAL+ IRRAD490 ,data=train_nt)
+car::vif(step.mod.gau10)
+```
+```{r}
+#cv give us similar result
+set.seed(1)
+cv.glm(train_nt,step.mod.gau8,K=10)$delta
+cv.glm(train_nt,step.mod.gau10,K=10)$delta
+```
+
+```{r}
+#After assessing all the variables, we will have step.mod.gau8 as our final result
+step.mod.gau8<-glm(log(CPHL)~LATITUDE+LONGITUDE+PROFILE+PHASE+DOX1+DOX2+CDOM+VBSC+HEAD+IRRAD670+DEPTH+TEMP+PSAL+IRRAD443,data=train_nt)
+car::vif(step.mod.gau8)
+summary(step.mod.gau8)
+```
+
+
+```{r}
+vif_pit<-car::vif(step.mod.gau8)
+b_h_p <- barplot(vif_pit,las=3,ylim = c(0,14))
+text(b_h_p,vif_pit+10,round(vif_pit,1),cex=0.8) 
+abline(h=10,lty=1,col="red")
+```
+```{r}
+par(mfrow = c(1, 2))
+plot(step.mod.gau8)
+```
+
+
+
+```{r}
+par(mfrow = c(1, 2))
+#calculate the MSE
+plot(density(log(test$CPHL)),xlim = c(-3,2))
+pred_step8<-predict(step.mod.gau8)
+plot(density(pred_step8))
+data.frame(RMSE = rmse(test$CPHL,pred_step8),
+            MAE = mae(test$CPHL,pred_step8),
+            MSE = mse(test$CPHL,pred_step8))
+
+```
+
+```{r}
+hist(log(test$CPHL),probability = TRUE,xlim = c(-2,1),ylim=c(0,2),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step8),sd=sd(pred_step8)),add=TRUE,lty=2,col="red")
+#curve(dnorm(x,shape=mean(test$CPHL)^2/var(test$CPHL),scale=var(test$CPHL)/mean(test$CPHL)),add=TRUE,col="blue")
+#curve(dgamma(x,shape=mean(pred_gam)^2/var(pred_gam),scale=var(pred_gam)/mean(pred_gam)),add=TRUE,col="red")
+```
+we see the log's mse is higher than gamma therefore our final model is 
+```{r}
+summary(step.mod.gam10)
+```
+
+
+```{r}
+#r^2 is 0.63
+R.sq11 <- 1-full.mod1.gau2$deviance/full.mod1.gau2$null.deviance
+R.sq11
+```
+```{r}
+summary(full.mod1.gau2)
+```
+```{r}
+summary(step.mod.gau8)
+```
