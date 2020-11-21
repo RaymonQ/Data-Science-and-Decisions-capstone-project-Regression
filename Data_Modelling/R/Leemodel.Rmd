@@ -1,0 +1,495 @@
+---
+title: "Leeuwin"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+lee<-read.csv("~/Desktop/Leeuwin20131017.csv", header = TRUE)
+attach(lee)
+summary(lee)
+```
+
+
+```{r}
+drop_lee <- c("CDOM_quality_control","CNDC_quality_control","CPHL_quality_control"," DEPTH_quality_control", "DOX1_quality_control"," DOX2_quality_control","FID","file_id", "HEAD_quality_control","IRRAD443_quality_control","IRRAD555_quality_control","IRRAD670_quality_control", "LATITUDE_quality_control","LONGITUDE_quality_control","DEPTH_quality_control","DOX2_quality_control","IRRAD490_quality_control","PHASE_quality_control","PROFILE_quality_control","PRES_quality_control","platform_code", "platform_type","PSAL_quality_control","TEMP_quality_control","TIME_quality_control","VBSC_quality_control", "VCUR_GPS_quality_control","deployment_name","time_coverage_start","time_coverage_end","geom")
+Lee <- lee[,!(colnames(lee)%in%drop_lee)]
+w <- which(Lee$CPHL==0)
+Lee <- Lee[-w,]
+```
+
+
+```{r}
+is_char <- lapply(Lee,typeof)=="character"
+#### separate the data set by character and numeric 
+numerical_r <- Lee[,!is_char]
+categorical_r <- Lee[,is_char]
+```
+
+
+```{r}
+library("corrplot")
+#correlation diagram
+corrplot(corr = cor(numerical_r))
+```
+
+
+```{r}
+sample_size = floor(0.8*nrow(Lee))
+set.seed(777)
+# randomly split data in r with 90%training and 10% testing 
+picked = sample(seq_len(nrow(Lee)),size = sample_size)
+train =Lee[picked,]
+test =Lee[-picked,]
+```
+
+model1: Timeseries model, time is too short, reject this model
+```{r}
+library("xts")
+library("forecast")
+library("tseries")
+library("zoo")
+traintx <- xts(train[, -1], order.by=as.Date(train$TIME))
+traints<-ts(traintx)
+```
+
+```{r}
+plot(traintx[,"CPHL"],col="blue")
+```
+
+
+```{r}
+drop_t <- c("TIME")
+train_nt<- train[,!(colnames(train)%in%drop_t)]
+Lee_nt<-Lee[,!(colnames(Lee)%in%drop_t)]
+```
+
+```{r}
+hist(lee$CPHL,probability = TRUE, xlim = c(0,1), breaks=200)
+lines(density(lee$CPHL),lty=1, col="red")
+```
+```{r}
+hist(log(lee$CPHL),probability = TRUE, breaks=10)
+lines(dnorm(log(lee$CPHL),mean=mean(log(lee$CPHL)),sd=sd(log(lee$CPHL))),,col="blue")
+lines(density(log(lee$CPHL)),lty=1, col="red")
+```
+
+model 2: gamma distribution, r^2 only 0.32
+```{r}
+full.mod1.gua <- glm(CPHL~.,data=train_nt)
+summary(full.mod1.gua)
+par(mfrow = c(1, 2))
+plot(full.mod1.gua)
+```
+
+```{r}
+#gamma distribution
+R.sq2 <- 1-full.mod1.gua$deviance/full.mod1.gua$null.deviance
+R.sq2
+```
+
+
+model 3: gaussian, r^2 0.55
+```{r}
+# residual vs fitted looks better 
+HighLeverage <- cooks.distance(full.mod1.gua) > 0.5
+LargeResiduals <- rstudent(full.mod1.gua) < -6
+train_nt <- train_nt[!HighLeverage & !LargeResiduals,]
+par(mfrow = c(1, 2))
+full.mod1.gualog <- glm(CPHL~.,family = gaussian(link="log"),data=train_nt)
+summary(full.mod1.gualog)
+plot(full.mod1.gualog)
+```
+
+
+```{r}
+R.sq3 <- 1-full.mod1.gualog$deviance/full.mod1.gualog$null.deviance
+R.sq3
+```
+
+```{r}
+#Still have a heavy tail on QQ plot and variance are changing  
+#may need some transformations
+par(mfrow = c(1, 2))
+full.mod1.gam <- glm(CPHL~.,data=train_nt,family=Gamma(link = "log"))
+summary(full.mod1.gam)
+plot(full.mod1.gam)
+```
+
+```{r}
+#r^2 is 0.58
+R.sq4 <- 1-full.mod1.gam$deviance/full.mod1.gam$null.deviance
+R.sq4
+```
+
+```{r}
+#taking log for the CPHL value 
+#Might be a normal distribution in that case 
+hist(log(lee$CPHL))
+```
+
+```{r}
+par(mfrow = c(1, 2))
+full.mod1.gau2 <- glm(log(CPHL)~.,data=train_nt)
+summary1<-summary(full.mod1.gau2)
+plot(full.mod1.gau2)
+```
+```{r}
+#We see that the CNCD has large p-value
+#maybe we can drop it 
+anova(full.mod1.gau2,test="Chisq")
+```
+
+```{r}
+#anova table shows us the CNDC might not be significant but it has correlation with CPHL, and correlation plot shows that CPHL has no or tiny correlation with PHASE LATITUDE LONGITUDE and HEAD 
+#model without those four 
+par(mfrow = c(1, 2))
+step.mod1.gau2 <- glm(log(CPHL)~PRES+DEPTH+PROFILE+TEMP+PSAL+DOX1+DOX2+CDOM+CNDC+VBSC,data=train_nt)
+summary2<-summary(step.mod1.gau2)
+plot(step.mod1.gau2)
+```
+
+```{r}
+anova(full.mod1.gau2,step.mod1.gau2,test="Chisq")
+#we should reject the full model,p-value is small
+```
+
+```{r}
+library("MASS")
+#use step function to minimize our model
+#seems to be the same full model
+step.mod1.gau3<-stepAIC(step.mod1.gau2, direction = "both",trace=FALSE)
+summary(step.mod1.gau3)
+```
+
+```{r}
+#r squared value is 0.59
+R.sq5 <- 1-step.mod1.gau3$deviance/step.mod1.gau3$null.deviance
+R.sq5
+```
+
+
+Trying to fit into another model which deal with the skewness
+```{r}
+library(boot)
+set.seed(1) 
+#The first component is the raw cross-validation estimate of prediction error. The second component is the adjusted cross-validation estimate. The adjustment is designed to compensate for the bias introduced by not using leave-one-out cross-validation.
+cv.glm(train_nt,step.mod1.gau2,K=10)$delta
+```
+
+
+```{r}
+library("sn")
+#based on the density diagram of log(CPHL), it shows  skewness
+#Fitting Linear Models With Skew-Elliptical Error Term  family is skew-normal
+selm.mod<-selm(log(CPHL)~PRES+DEPTH+PROFILE+TEMP+PSAL+DOX1+DOX2+CDOM+CNDC+VBSC,data=train_nt)
+summary(selm.mod)
+```
+
+```{r}
+par(mfrow = c(1, 2))
+plot(selm.mod)
+```
+
+Analysis
+
+
+```{r}
+library(ModelMetrics)
+#calculate the MSE
+#response with log and gaussian family
+par(mfrow = c(1, 2))
+#calculate the MSE
+plot(density(log(test$CPHL)),xlim = c(-5,1))
+plot(density(predict(step.mod1.gau2,newdata=test,type="response")))
+pred_gau2<-predict(step.mod1.gau2, test)
+data.frame(RMSE = rmse(test$CPHL,pred_gau2),
+            MAE = mae(test$CPHL,pred_gau2),
+            MSE=mse(test$CPHL,pred_gau2))
+```
+
+
+```{r}
+##selm model
+par(mfrow = c(1, 2))
+#calculate the MSE
+plot(density(log(test$CPHL)),xlim = c(-5,1))
+pred_selm<-predict(selm.mod,test)
+plot(density(pred_selm))
+data.frame(RMSE = rmse(test$CPHL,pred_selm),
+            MAE = mae(test$CPHL,pred_selm),
+            MSE = mse(test$CPHL,pred_selm))
+
+```
+
+Our final model is 
+```{r}
+summary(step.mod1.gau2)
+#VIF>10, it has multicollinearity
+car::vif(step.mod1.gau2)
+```
+
+```{r}
+step.mod.gau<-glm(log(CPHL)~PROFILE+CDOM+VBSC,data=train_nt)
+car::vif(step.mod.gau)
+```
+
+```{r}
+#beginning we see the result from our step model with only VIF<10 
+#we see that the peak contains huge difference
+pred_step<-predict(step.mod.gau)
+hist(log(test$CPHL),probability = TRUE,xlim = c(-5,1),ylim=c(0,1.5),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step),sd=sd(pred_step)),add=TRUE,lty=2,col="red")
+```
+
+```{r}
+step.mod.gau1<-glm(log(CPHL)~PROFILE+CDOM+VBSC+DEPTH,data=train_nt)
+car::vif(step.mod.gau1)
+```
+
+```{r}
+pred_step1<-predict(step.mod.gau1)
+hist(log(test$CPHL),probability = TRUE,xlim = c(-5,1),ylim=c(0,1.5),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step1),sd=sd(pred_step1)),add=TRUE,lty=2,col="red")
+```
+```{r}
+step.mod.gau12<-glm(log(CPHL)~PROFILE+CDOM+VBSC+DEPTH+PRES,data=train_nt)
+car::vif(step.mod.gau12)
+```
+
+```{r}
+step.mod.gau2<-glm(log(CPHL)~PROFILE+CDOM+VBSC+PRES,data=train_nt)
+car::vif(step.mod.gau2)
+```
+
+```{r}
+pred_step2<-predict(step.mod.gau2)
+hist(log(test$CPHL),probability = TRUE,xlim = c(-5,1),ylim=c(0,2),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step2),sd=sd(pred_step2)),add=TRUE,lty=2,col="red")
+```
+```{r}
+set.seed(1)
+cv.glm(train_nt,step.mod.gau2,K=10)$delta
+```
+```{r}
+set.seed(1)
+cv.glm(train_nt,step.mod.gau1,K=10)$delta
+```
+so we add depth
+
+```{r}
+step.mod.gau3<-glm(log(CPHL)~PROFILE+CDOM+VBSC+DEPTH+TEMP,data=train_nt)
+car::vif(step.mod.gau3)
+#temp and depth are highly correlated
+```
+```{r}
+pred_step3<-predict(step.mod.gau3)
+hist(log(test$CPHL),probability = TRUE,xlim = c(-5,1),ylim=c(0,1.5),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step3),sd=sd(pred_step3)),add=TRUE,lty=2,col="red")
+```
+
+```{r}
+set.seed(1)
+cv.glm(train_nt,step.mod.gau3,K=10)$delta
+```
+
+
+```{r}
+step.mod.gau4<-glm(log(CPHL)~PROFILE+CDOM+VBSC+TEMP,data=train_nt)
+car::vif(step.mod.gau4)
+```
+```{r}
+pred_step4<-predict(step.mod.gau4)
+hist(log(test$CPHL),probability = TRUE,xlim = c(-5,1),ylim=c(0,1.5),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step4),sd=sd(pred_step4)),add=TRUE,lty=2,col="red")
+```
+
+
+```{r}
+set.seed(1)
+cv.glm(train_nt,step.mod.gau4,K=10)$delta
+#so we add temp instead of depth
+```
+
+
+```{r}
+step.mod.gau5<-glm(log(CPHL)~PROFILE+CDOM+VBSC+TEMP+PSAL,data=train_nt)
+car::vif(step.mod.gau5)
+```
+```{r}
+pred_step5<-predict(step.mod.gau5)
+hist(log(test$CPHL),probability = TRUE,xlim = c(-5,1),ylim=c(0,1.5),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step5),sd=sd(pred_step5)),add=TRUE,lty=2,col="red")
+```
+
+```{r}
+set.seed(1)
+cv.glm(train_nt,step.mod.gau5,K=10)$delta
+```
+
+```{r}
+step.mod.gau6<-glm(log(CPHL)~PROFILE+CDOM+VBSC+TEMP+PSAL+DOX1,data=train_nt)
+car::vif(step.mod.gau6)
+```
+```{r}
+pred_step6<-predict(step.mod.gau6)
+hist(log(test$CPHL),probability = TRUE,xlim = c(-5,1),ylim=c(0,1.5),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step6),sd=sd(pred_step6)),add=TRUE,lty=2,col="red")
+```
+
+
+```{r}
+set.seed(1)
+cv.glm(train_nt,step.mod.gau6,K=10)$delta
+```
+
+
+```{r}
+step.mod.gau7<-glm(log(CPHL)~PROFILE+CDOM+VBSC+TEMP+PSAL+DOX2,data=train_nt)
+car::vif(step.mod.gau7)
+#dox1 and dox2 highly correlated, we choose one
+```
+```{r}
+step.mod.gau71<-glm(log(CPHL)~PROFILE+CDOM+VBSC+TEMP+PSAL+DOX2+DOX1,data=train_nt)
+car::vif(step.mod.gau71)
+```
+
+```{r}
+pred_step7<-predict(step.mod.gau7)
+hist(log(test$CPHL),probability = TRUE,xlim = c(-5,1),ylim=c(0,1.5),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step7),sd=sd(pred_step7)),add=TRUE,lty=2,col="red")
+```
+
+
+```{r}
+set.seed(1)
+cv.glm(train_nt,step.mod.gau7,K=10)$delta
+#we choose dox1
+```
+
+
+```{r}
+step.mod.gau8<-glm(log(CPHL)~PROFILE+CDOM+VBSC+TEMP+PSAL+DOX1+CNDC,data=train_nt)
+car::vif(step.mod.gau8)
+#temp and cndc are highly correlated, we need to choose one
+```
+
+```{r}
+pred_step8<-predict(step.mod.gau8)
+hist(log(test$CPHL),probability = TRUE,xlim = c(-5,1),ylim=c(0,1.5),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step8),sd=sd(pred_step8)),add=TRUE,lty=2,col="red")
+```
+
+```{r}
+set.seed(1)
+cv.glm(train_nt,step.mod.gau8,K=10)$delta
+```
+
+
+```{r}
+step.mod.gau9<-glm(log(CPHL)~PROFILE+CDOM+VBSC+PSAL+DOX1+CNDC,data=train_nt)
+car::vif(step.mod.gau9)
+```
+```{r}
+pred_step9<-predict(step.mod.gau9)
+hist(log(test$CPHL),probability = TRUE,xlim = c(-5,1),ylim=c(0,1.5),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step9),sd=sd(pred_step9)),add=TRUE,lty=2,col="red")
+```
+
+
+```{r}
+set.seed(1)
+cv.glm(train_nt,step.mod.gau9,K=10)$delta
+```
+
+
+```{r}
+step.mod.gau10<-glm(log(CPHL)~PROFILE+CDOM+VBSC+PSAL+DOX1+TEMP,data=train_nt)
+car::vif(step.mod.gau10)
+```
+```{r}
+pred_step10<-predict(step.mod.gau10)
+hist(log(test$CPHL),probability = TRUE,xlim = c(-5,1),ylim=c(0,1.5),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step10),sd=sd(pred_step10)),add=TRUE,lty=2,col="red")
+```
+
+```{r}
+set.seed(1)
+cv.glm(train_nt,step.mod.gau10,K=10)$delta
+#we choose CNDC
+```
+
+```{r}
+#After assessing all the variables, we will have step.mod.gau9 as our final result
+step.mod.gau9<-glm(log(CPHL)~PROFILE+CDOM+VBSC+PSAL+DOX1+CNDC,data=train_nt)
+car::vif(step.mod.gau9)
+summary(step.mod.gau9)
+```
+
+
+```{r}
+vif_pit<-car::vif(step.mod.gau9)
+b_h_p <- barplot(vif_pit,las=3,ylim = c(0,14))
+text(b_h_p,vif_pit+10,round(vif_pit,1),cex=0.8) 
+abline(h=10,lty=1,col="red")
+```
+
+
+```{r}
+par(mfrow = c(1, 2))
+plot(step.mod.gau9)
+```
+
+
+```{r}
+par(mfrow = c(1, 2))
+#calculate the MSE
+plot(density(log(test$CPHL)),xlim = c(-5,1))
+pred_step9<-predict(step.mod.gau9)
+plot(density(pred_step9))
+data.frame(RMSE = rmse(test$CPHL,pred_step9),
+            MAE = mae(test$CPHL,pred_step9),
+            MSE = mse(test$CPHL,pred_step9))
+
+```
+
+```{r}
+hist(log(test$CPHL),probability = TRUE,xlim = c(-5,1),ylim=c(0,2),breaks=200)
+curve(dnorm(x,mean=mean(log(test$CPHL)),sd=sd(log(test$CPHL))),add=TRUE,col="blue")
+curve(dnorm(x,mean=mean(pred_step9),sd=sd(pred_step9)),add=TRUE,lty=2,col="red")
+```
+
+```{r}
+#r squared value is 0.56
+R.sq.f <- 1-step.mod.gau9$deviance/step.mod.gau9$null.deviance
+R.sq.f
+```
+
+
+```{r}
+#bootstrap suggests estimator is consistent with the predictor estimate from the summary output, also we notice the difference of standard error from bootstrap and standard error from summary output generally not exceed 10%. 
+#a good correspondence between bootstrap estimate and standard estimate in Gamma GLM, implies that this model is not over optimistic about the performance.
+formula(step.mod.gau9) 
+boot.gam_pit<-function(dataset,rows.used){
+return(coef(glm(log(CPHL)~PROFILE+CDOM+VBSC+PSAL+DOX1+CNDC,data=train_nt, subset = rows.used)))
+} 
+boot(train_nt,boot.gam_pit,R=100) 
+summary(step.mod.gau9)
+```
+
+
+
